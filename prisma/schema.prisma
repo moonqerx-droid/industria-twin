@@ -1,0 +1,342 @@
+// INDUSTRIA TWIN — схема демонстрационной базы данных (SQLite).
+// Перечислимые значения хранятся строками и проверяются Zod-схемами на сервере
+// (см. src/server/validation). Идентификаторы производственных сущностей стабильны
+// (например, "st-testing") и используются одновременно в процессе, симуляции и 3D-сцене.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- Доступ
+
+model Role {
+  id          String @id // admin | engineer | viewer
+  name        String
+  description String
+  users       User[]
+}
+
+/// Учётная запись. Минимизация ПДн (152-ФЗ): только логин и отображаемое имя-псевдоним,
+/// без e-mail, телефона и ФИО. Пароль хранится только в виде bcrypt-хеша.
+model User {
+  id           String          @id @default(cuid())
+  login        String          @unique
+  displayName  String
+  passwordHash String
+  roleId       String
+  role         Role            @relation(fields: [roleId], references: [id])
+  isActive     Boolean         @default(true)
+  createdAt    DateTime        @default(now())
+  lastLoginAt  DateTime?
+  sessions     Session[]
+  scenarios    Scenario[]
+  runs         SimulationRun[]
+}
+
+/// Серверная сессия: позволяет отзывать доступ (выход, блокировка) при подписанном cookie.
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ---------------------------------------------------------------- Производственная модель
+
+model Factory {
+  id          String              @id
+  name        String
+  description String
+  isSynthetic Boolean             @default(true)
+  processes   ProductionProcess[]
+  stations    Station[]
+  pois        PointOfInterest[]
+  tours       Tour[]
+}
+
+model ProductionProcess {
+  id        String        @id
+  factoryId String
+  factory   Factory       @relation(fields: [factoryId], references: [id], onDelete: Cascade)
+  name      String
+  version   Int           @default(1)
+  nodes     ProcessNode[]
+  edges     ProcessEdge[]
+  scenarios Scenario[]
+}
+
+/// Производственный участок. id (stationId) — сквозной ключ для процесса, ресурса,
+/// метрик симуляции, точки интереса и объекта 3D-сцены.
+model Station {
+  id          String                     @id
+  factoryId   String
+  factory     Factory                    @relation(fields: [factoryId], references: [id], onDelete: Cascade)
+  code        String
+  name        String
+  shortName   String
+  zone        String
+  kind        String
+  description String
+  sortOrder   Int
+  resources   Resource[]
+  nodes       ProcessNode[]
+  parameters  ScenarioStationParameter[]
+  metrics     StationMetric[]
+  pois        PointOfInterest[]
+
+  @@unique([factoryId, code])
+}
+
+model Resource {
+  id          String  @id
+  stationId   String
+  station     Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  name        String
+  kind        String
+  unitName    String
+  description String
+
+  @@index([stationId])
+}
+
+model ProcessNode {
+  id        String            @id
+  processId String
+  process   ProductionProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
+  type      String // start | task | gateway | end
+  name      String
+  stationId String?
+  station   Station?          @relation(fields: [stationId], references: [id])
+  x         Float
+  y         Float
+  outgoing  ProcessEdge[]     @relation("edgeFrom")
+  incoming  ProcessEdge[]     @relation("edgeTo")
+
+  @@index([processId])
+  @@index([stationId])
+}
+
+model ProcessEdge {
+  id         String            @id
+  processId  String
+  process    ProductionProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
+  fromNodeId String
+  toNodeId   String
+  from       ProcessNode       @relation("edgeFrom", fields: [fromNodeId], references: [id], onDelete: Cascade)
+  to         ProcessNode       @relation("edgeTo", fields: [toNodeId], references: [id], onDelete: Cascade)
+  label      String?
+  condition  String // always | pass | fail | scrap
+
+  @@index([processId])
+}
+
+// ---------------------------------------------------------------- Сценарии
+
+/// Сценарий: глобальные параметры хранятся типизированными столбцами,
+/// параметры участков — в ScenarioStationParameter (по одной строке на участок).
+model Scenario {
+  id                      String                     @id @default(cuid())
+  processId               String
+  process                 ProductionProcess          @relation(fields: [processId], references: [id])
+  name                    String
+  description             String                     @default("")
+  isBaseline              Boolean                    @default(false)
+  isSynthetic             Boolean                    @default(true)
+  parentScenarioId        String?
+  parent                  Scenario?                  @relation("scenarioCopies", fields: [parentScenarioId], references: [id], onDelete: SetNull)
+  copies                  Scenario[]                 @relation("scenarioCopies")
+  createdById             String?
+  createdBy               User?                      @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt               DateTime                   @default(now())
+  updatedAt               DateTime                   @updatedAt
+  horizonMin              Float
+  releaseWindowMin        Float
+  arrivalKind             String // poisson | deterministic
+  arrivalRatePerHour      Float
+  defectProbability       Float
+  retestDefectProbability Float
+  maxReworkCycles         Int
+  materialCostPerUnitRub  Float
+  fixedCostRub            Float
+  seed                    Int
+  replications            Int
+  stationParameters       ScenarioStationParameter[]
+  runs                    SimulationRun[]
+
+  @@index([processId])
+}
+
+model ScenarioStationParameter {
+  id                         String   @id @default(cuid())
+  scenarioId                 String
+  scenario                   Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  stationId                  String
+  station                    Station  @relation(fields: [stationId], references: [id])
+  capacity                   Int
+  distribution               String // fixed | exponential | uniform | triangular | normal
+  timeMin                    Float? // min (uniform, triangular, normal)
+  timeMode                   Float? // mode (triangular)
+  timeMax                    Float? // max (uniform, triangular)
+  timeMean                   Float? // mean/value (fixed, exponential, normal)
+  timeSd                     Float? // sd (normal)
+  hourlyCostRub              Float
+  consumablesPerOperationRub Float
+
+  @@unique([scenarioId, stationId])
+}
+
+// ---------------------------------------------------------------- Результаты моделирования
+
+/// Прогон: R репликаций одного сценария. configJson — неизменяемый снимок параметров
+/// на момент запуска (результат остаётся воспроизводимым после редактирования сценария).
+model SimulationRun {
+  id              String              @id @default(cuid())
+  scenarioId      String
+  scenario        Scenario            @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  scenarioName    String
+  status          String // completed | failed
+  engineVersion   String
+  baseSeed        Int
+  replications    Int
+  horizonMin      Float
+  configJson      String
+  durationMs      Int
+  errorMessage    String?
+  createdById     String?
+  createdBy       User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt       DateTime            @default(now())
+  aggregate       AggregateMetric[]
+  stationMetrics  StationMetric[]
+  replicationRows ReplicationResult[]
+  eventLog        SimulationEventLog?
+
+  @@index([scenarioId, createdAt])
+  @@index([createdAt])
+}
+
+/// Сводная метрика прогона по репликациям (ключи — каталог AGGREGATE_METRICS).
+model AggregateMetric {
+  id        String        @id @default(cuid())
+  runId     String
+  run       SimulationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  metricKey String
+  unit      String
+  n         Int
+  mean      Float?
+  sd        Float?
+  min       Float?
+  max       Float?
+  ci95      Float?
+
+  @@unique([runId, metricKey])
+}
+
+/// Метрика участка по репликациям (ключи — каталог STATION_METRICS).
+model StationMetric {
+  id        String        @id @default(cuid())
+  runId     String
+  run       SimulationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  stationId String
+  station   Station       @relation(fields: [stationId], references: [id])
+  metricKey String
+  unit      String
+  n         Int
+  mean      Float?
+  sd        Float?
+  min       Float?
+  max       Float?
+  ci95      Float?
+
+  @@unique([runId, stationId, metricKey])
+  @@index([stationId])
+}
+
+/// Итог одной репликации — нужен для оценки разброса и статистического сравнения.
+model ReplicationResult {
+  id               String        @id @default(cuid())
+  runId            String
+  run              SimulationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  replicationIndex Int
+  seed             Int
+  aggregateJson    String
+  stationsJson     String
+
+  @@unique([runId, replicationIndex])
+}
+
+/// Журнал событий и кадры состояния репликации №0 одним сжатым JSON-документом.
+/// Обоснование: события читаются только целиком (для воспроизведения), построчное
+/// хранение тысяч строк на прогон не даёт выигрыша в запросах и замедляет запись.
+model SimulationEventLog {
+  runId         String        @id
+  run           SimulationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  formatVersion Int
+  eventCount    Int
+  truncated     Boolean
+  eventsJson    String
+  snapshotsJson String
+}
+
+// ---------------------------------------------------------------- 3D-тур
+
+model PointOfInterest {
+  id             String       @id
+  factoryId      String
+  factory        Factory      @relation(fields: [factoryId], references: [id], onDelete: Cascade)
+  stationId      String?
+  station        Station?     @relation(fields: [stationId], references: [id])
+  title          String
+  kind           String // overview | station | practice
+  description    String
+  bestPractice   String?
+  cameraPresetId String
+  metricKeys     String // список ключей метрик через запятую
+  stops          TourStop[]
+  media          MediaAsset[]
+
+  @@index([stationId])
+}
+
+model Tour {
+  id          String     @id
+  factoryId   String
+  factory     Factory    @relation(fields: [factoryId], references: [id], onDelete: Cascade)
+  name        String
+  audience    String
+  description String
+  stops       TourStop[]
+}
+
+model TourStop {
+  id        String          @id @default(cuid())
+  tourId    String
+  tour      Tour            @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  order     Int
+  poiId     String
+  poi       PointOfInterest @relation(fields: [poiId], references: [id], onDelete: Cascade)
+  title     String
+  narrative String
+
+  @@unique([tourId, order])
+}
+
+/// Медиа точки интереса. isPlaceholder=true — процедурная заглушка, внешний файл не требуется.
+model MediaAsset {
+  id            String          @id
+  poiId         String
+  poi           PointOfInterest @relation(fields: [poiId], references: [id], onDelete: Cascade)
+  kind          String // image | video | glb
+  uri           String
+  title         String
+  license       String
+  isPlaceholder Boolean         @default(true)
+}

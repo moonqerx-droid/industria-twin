@@ -1,0 +1,104 @@
+@import "tailwindcss";
+
+/*
+ * INDUSTRIA TWIN — светлая инженерная тема.
+ * Холодная серая «чертёжная» подложка, белые рабочие панели с тонкими линиями,
+ * один акцент — инженерный синий. Цвета состояния (норма/загрузка/перегрузка) зарезервированы
+ * и всегда сопровождаются подписью.
+ */
+@theme {
+  --font-sans: var(--font-plex), "Segoe UI", system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", monospace;
+
+  --color-field: #eef1f5;
+  --color-surface: #ffffff;
+  --color-raised: #f4f6f9;
+  --color-line: #dce2e9;
+  --color-line-strong: #c2ccd7;
+  --color-ink: #0e1c2b;
+  --color-muted: #526377;
+  --color-faint: #64748a;
+  --color-accent: #1f66c9;
+  --color-accent-strong: #164f9e;
+  --color-accent-soft: #e8f0fb;
+  --color-ok: #1d7f55;
+  --color-warn: #a2620a;
+  --color-crit: #bf3a2b;
+  --color-rail: #0d1a28;
+
+  --radius-panel: 8px;
+  --radius-control: 6px;
+}
+
+:root { color-scheme: light; }
+html, body { background: var(--color-field); color: var(--color-ink); }
+body {
+  font-family: var(--font-sans);
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+input[type="range"], input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent); }
+button, a, select, input { -webkit-tap-highlight-color: transparent; }
+button:not(:disabled), select { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+::selection { background: #cfe0f8; color: #0e2b52; }
+
+/* Поверхности */
+.panel-surface { box-shadow: 0 1px 0 #0e1c2b08, 0 1px 3px #0e1c2b0a; }
+.app-main .panel-surface > header { background: linear-gradient(#fbfcfd, #f8fafc); }
+.page-heading { font-weight: 600; letter-spacing: -0.022em; }
+.kpi-value { font-weight: 500; letter-spacing: -0.03em; }
+
+/* Таблицы */
+.app-main table th { font-weight: 500; color: var(--color-muted); font-size: 12px; }
+.app-main table tbody td { padding-top: 12px; padding-bottom: 12px; }
+.app-main table tbody tr { transition: background-color .12s; }
+.app-main table tbody tr:hover { background: #f3f6fa; }
+.app-main select { min-height: 38px; }
+
+/* Боковая панель */
+.app-sidebar { background: var(--color-rail); color: #e8eef5; }
+.app-sidebar .rail-muted { color: #93a4b8; }
+.app-nav-link { color: #b4c2d2; position: relative; }
+.app-nav-link:hover { background: #ffffff0d; color: #fff; }
+.app-nav-link[aria-current="page"] { background: #1f66c933; color: #fff; }
+.app-nav-link[aria-current="page"]::before {
+  content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: #5d9cf0;
+}
+
+/* Индикатор состояния (андон) */
+.lamp { display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 16%, transparent); }
+.lamp-critical { animation: lamp-pulse 1.6s ease-in-out infinite; }
+@keyframes lamp-pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, currentColor 8%, transparent); } }
+
+/* 3D-вьюпорт: светлая «студия», как в инженерных просмотрщиках */
+.factory-viewport {
+  background:
+    radial-gradient(120% 90% at 50% 0%, #f7f9fb 0%, #e6ebf0 62%, #d9e0e7 100%);
+}
+.viewport-chip {
+  background: #ffffffe6; border: 1px solid #d3dbe4; color: var(--color-ink);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 1px 2px #0e1c2b14, 0 4px 14px #0e1c2b10;
+}
+.viewport-chip:hover { border-color: var(--color-accent); }
+.station-label { box-shadow: 0 1px 2px #0e1c2b1f, 0 6px 18px #0e1c2b1c; }
+
+/* Чертёжная сетка для декоративных подложек */
+.blueprint-grid {
+  background-image:
+    linear-gradient(#ffffff0a 1px, transparent 1px),
+    linear-gradient(90deg, #ffffff0a 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+@media (min-width: 1024px) { .app-main { max-width: 1680px; width: 100%; margin-inline: auto; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+/* Полоса KPI: единый приборный блок с разделителями */
+.kpi-strip { gap: 1px; background: var(--color-line); border: 1px solid var(--color-line); border-radius: var(--radius-panel); overflow: hidden; box-shadow: 0 1px 3px #0e1c2b0a; }
+.kpi-strip .kpi-card { border: 0; border-radius: 0; }

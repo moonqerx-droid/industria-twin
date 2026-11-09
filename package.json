@@ -1,0 +1,65 @@
+{
+  "name": "industria-twin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "INDUSTRIA TWIN — цифровой двойник сборочного производства насосов и 3D-тур (демонстрационный прототип хакатона)",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:reset": "prisma migrate reset",
+    "setup": "npm run db:migrate && npm run db:seed",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "playwright test",
+    "verify": "npm run typecheck && npm run test && npm run build",
+    "report:scenarios": "tsx scripts/scenario-report.ts"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "engines": {
+    "node": ">=20.9"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "@react-three/drei": "10.7.6",
+    "@react-three/fiber": "9.4.0",
+    "bcryptjs": "3.0.3",
+    "clsx": "2.1.1",
+    "jose": "6.1.0",
+    "lucide-react": "0.548.0",
+    "next": "15.5.29",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "recharts": "3.3.0",
+    "three": "0.180.0",
+    "zod": "4.1.12",
+    "zustand": "5.0.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@tailwindcss/postcss": "4.1.16",
+    "@types/node": "22.18.0",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@types/three": "0.180.0",
+    "prisma": "6.19.3",
+    "tailwindcss": "4.1.16",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  },
+  "allowScripts": {
+    "prisma@6.19.3": true,
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true
+  }
+}

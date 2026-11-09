@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- INDUSTRIA TWIN: BPMN 2.0 исходного процесса изготовления и сборки насоса.
+     Идентификаторы элементов совпадают с ProcessNode/ProcessEdge (src/domain/model/demoData.ts). -->
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+                  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  id="defs-industria-twin"
+                  targetNamespace="https://industria-twin.local/bpmn"
+                  exporter="INDUSTRIA TWIN" exporterVersion="1.0.0">
+  <bpmn:process id="process-pump-assembly" name="Изготовление и сборка центробежного насоса" isExecutable="false">
+    <bpmn:startEvent id="pn-order" name="Поступление задания">
+      <bpmn:outgoing>pe-1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:task id="pn-receiving" name="Комплектация (A1, st-receiving)">
+      <bpmn:incoming>pe-1</bpmn:incoming>
+      <bpmn:outgoing>pe-2</bpmn:outgoing>
+    </bpmn:task>
+    <bpmn:task id="pn-machining" name="Мехобработка (B1, st-machining)">
+      <bpmn:incoming>pe-2</bpmn:incoming>
+      <bpmn:outgoing>pe-3</bpmn:outgoing>
+    </bpmn:task>
+    <bpmn:task id="pn-assembly" name="Сборка (C1, st-assembly)">
+      <bpmn:incoming>pe-3</bpmn:incoming>
+      <bpmn:outgoing>pe-4</bpmn:outgoing>
+    </bpmn:task>
+    <bpmn:task id="pn-testing" name="Испытания (D1, st-testing)">
+      <bpmn:incoming>pe-4</bpmn:incoming>
+      <bpmn:incoming>pe-8</bpmn:incoming>
+      <bpmn:outgoing>pe-5</bpmn:outgoing>
+    </bpmn:task>
+    <bpmn:exclusiveGateway id="pn-quality" name="Годен?" default="pe-6">
+      <bpmn:incoming>pe-5</bpmn:incoming>
+      <bpmn:outgoing>pe-6</bpmn:outgoing>
+      <bpmn:outgoing>pe-7</bpmn:outgoing>
+      <bpmn:outgoing>pe-9</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:task id="pn-rework" name="Доработка (D2, st-rework)">
+      <bpmn:incoming>pe-7</bpmn:incoming>
+      <bpmn:outgoing>pe-8</bpmn:outgoing>
+    </bpmn:task>
+    <bpmn:task id="pn-packing" name="Упаковка и отгрузка (E1, st-packing)">
+      <bpmn:incoming>pe-6</bpmn:incoming>
+      <bpmn:outgoing>pe-10</bpmn:outgoing>
+    </bpmn:task>
+    <bpmn:endEvent id="pn-shipped" name="Отгружено">
+      <bpmn:incoming>pe-10</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:endEvent id="pn-scrap" name="Списано">
+      <bpmn:incoming>pe-9</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:sequenceFlow id="pe-1" sourceRef="pn-order" targetRef="pn-receiving" />
+    <bpmn:sequenceFlow id="pe-2" sourceRef="pn-receiving" targetRef="pn-machining" />
+    <bpmn:sequenceFlow id="pe-3" sourceRef="pn-machining" targetRef="pn-assembly" />
+    <bpmn:sequenceFlow id="pe-4" sourceRef="pn-assembly" targetRef="pn-testing" />
+    <bpmn:sequenceFlow id="pe-5" sourceRef="pn-testing" targetRef="pn-quality" />
+    <bpmn:sequenceFlow id="pe-6" name="годен" sourceRef="pn-quality" targetRef="pn-packing" />
+    <bpmn:sequenceFlow id="pe-7" name="дефект" sourceRef="pn-quality" targetRef="pn-rework">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">defect &amp;&amp; reworkCycles &lt; maxReworkCycles</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="pe-8" name="повторные испытания" sourceRef="pn-rework" targetRef="pn-testing" />
+    <bpmn:sequenceFlow id="pe-9" name="лимит доработок" sourceRef="pn-quality" targetRef="pn-scrap">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">defect &amp;&amp; reworkCycles &gt;= maxReworkCycles</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="pe-10" sourceRef="pn-packing" targetRef="pn-shipped" />
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="diagram-pump">
+    <bpmndi:BPMNPlane id="plane-pump" bpmnElement="process-pump-assembly">
+      <bpmndi:BPMNShape id="pn-order_di" bpmnElement="pn-order"><dc:Bounds x="80" y="202" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="pn-receiving_di" bpmnElement="pn-receiving"><dc:Bounds x="170" y="180" width="120" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="pn-machining_di" bpmnElement="pn-machining"><dc:Bounds x="330" y="180" width="120" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="pn-assembly_di" bpmnElement="pn-assembly"><dc:Bounds x="490" y="180" width="120" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="pn-testing_di" bpmnElement="pn-testing"><dc:Bounds x="650" y="180" width="120" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="pn-quality_di" bpmnElement="pn-quality" isMarkerVisible="true"><dc:Bounds x="815" y="195" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="pn-rework_di" bpmnElement="pn-rework"><dc:Bounds x="650" y="340" width="120" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="pn-packing_di" bpmnElement="pn-packing"><dc:Bounds x="910" y="180" width="120" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="pn-shipped_di" bpmnElement="pn-shipped"><dc:Bounds x="1080" y="202" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="pn-scrap_di" bpmnElement="pn-scrap"><dc:Bounds x="822" y="82" width="36" height="36" /></bpmndi:BPMNShape>
+
+      <bpmndi:BPMNEdge id="pe-1_di" bpmnElement="pe-1"><di:waypoint x="116" y="220" /><di:waypoint x="170" y="220" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="pe-2_di" bpmnElement="pe-2"><di:waypoint x="290" y="220" /><di:waypoint x="330" y="220" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="pe-3_di" bpmnElement="pe-3"><di:waypoint x="450" y="220" /><di:waypoint x="490" y="220" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="pe-4_di" bpmnElement="pe-4"><di:waypoint x="610" y="220" /><di:waypoint x="650" y="220" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="pe-5_di" bpmnElement="pe-5"><di:waypoint x="770" y="220" /><di:waypoint x="815" y="220" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="pe-6_di" bpmnElement="pe-6"><di:waypoint x="865" y="220" /><di:waypoint x="910" y="220" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="pe-7_di" bpmnElement="pe-7"><di:waypoint x="840" y="245" /><di:waypoint x="840" y="380" /><di:waypoint x="770" y="380" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="pe-8_di" bpmnElement="pe-8"><di:waypoint x="710" y="340" /><di:waypoint x="710" y="260" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="pe-9_di" bpmnElement="pe-9"><di:waypoint x="840" y="195" /><di:waypoint x="840" y="118" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="pe-10_di" bpmnElement="pe-10"><di:waypoint x="1030" y="220" /><di:waypoint x="1080" y="220" /></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

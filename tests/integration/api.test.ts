@@ -1,0 +1,301 @@
+import { beforeAll, describe, expect, it } from "vitest";
+import * as loginRoute from "@/app/api/auth/login/route";
+import * as logoutRoute from "@/app/api/auth/logout/route";
+import * as meRoute from "@/app/api/auth/me/route";
+import * as modelRoute from "@/app/api/model/route";
+import * as resourcesRoute from "@/app/api/resources/route";
+import * as scenariosRoute from "@/app/api/scenarios/route";
+import * as scenarioRoute from "@/app/api/scenarios/[id]/route";
+import * as copyRoute from "@/app/api/scenarios/[id]/copy/route";
+import * as runRoute from "@/app/api/scenarios/[id]/run/route";
+import * as runsRoute from "@/app/api/runs/route";
+import * as runDetailRoute from "@/app/api/runs/[id]/route";
+import * as replayRoute from "@/app/api/runs/[id]/replay/route";
+import * as compareRoute from "@/app/api/compare/route";
+import * as poisRoute from "@/app/api/pois/route";
+import * as tourRoute from "@/app/api/tour/route";
+import * as stationMetricsRoute from "@/app/api/stations/[id]/metrics/route";
+import * as usersRoute from "@/app/api/admin/users/route";
+import { BASELINE_PARAMETERS, STATION_IDS } from "@/domain/model/demoData";
+import { demoAccounts } from "@/server/services/seedService";
+import { loginLimiter, simulationLimiter } from "@/server/rateLimit";
+
+const BASE = "http://localhost:3000";
+const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+
+function request(path: string, opts: { method?: string; cookie?: string; body?: unknown; origin?: string } = {}): Request {
+  const headers = new Headers({ host: "localhost:3000" });
+  if (opts.cookie) headers.set("cookie", opts.cookie);
+  if (opts.origin) headers.set("origin", opts.origin);
+  if (opts.body !== undefined) headers.set("content-type", "application/json");
+  return new Request(BASE + path, {
+    method: opts.method ?? "GET",
+    headers,
+    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+  });
+}
+
+async function login(role: "admin" | "engineer" | "viewer"): Promise<string> {
+  const acc = demoAccounts().find((a) => a.role === role)!;
+  const res = await loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: acc.login, password: acc.password } }));
+  expect(res.status).toBe(200);
+  const setCookie = res.headers.get("set-cookie")!;
+  expect(setCookie).toContain("HttpOnly");
+  expect(setCookie.toLowerCase()).toContain("samesite=lax");
+  return setCookie.split(";")[0]!;
+}
+
+let engineer = "";
+let viewer = "";
+let admin = "";
+
+beforeAll(async () => {
+  loginLimiter.reset();
+  simulationLimiter.reset();
+  engineer = await login("engineer");
+  viewer = await login("viewer");
+  admin = await login("admin");
+});
+
+describe("Аутентификация", () => {
+  it("отклоняет неверный пароль", async () => {
+    const res = await loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: "engineer", password: "wrong" } }));
+    expect(res.status).toBe(401);
+  });
+  it("отклоняет некорректное тело запроса", async () => {
+    const res = await loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: "" } }));
+    expect(res.status).toBe(400);
+  });
+  it("без cookie доступ к API запрещён", async () => {
+    const res = await modelRoute.GET(request("/api/model"));
+    expect(res.status).toBe(401);
+  });
+  it("поддельный токен не принимается", async () => {
+    const res = await modelRoute.GET(request("/api/model", { cookie: "it_session=eyJhbGciOiJIUzI1NiJ9.e30.invalid" }));
+    expect(res.status).toBe(401);
+  });
+  it("возвращает текущего пользователя и роль", async () => {
+    const res = await meRoute.GET(request("/api/auth/me", { cookie: engineer }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).user.role).toBe("engineer");
+  });
+  it("выход отзывает серверную сессию", async () => {
+    const cookie = await login("viewer");
+    const out = await logoutRoute.POST(request("/api/auth/logout", { method: "POST", cookie }));
+    expect(out.status).toBe(200);
+    const res = await meRoute.GET(request("/api/auth/me", { cookie }));
+    expect(res.status).toBe(401);
+  });
+  it("ограничивает частоту попыток входа", async () => {
+    loginLimiter.reset();
+    let last = 0;
+    for (let i = 0; i < 11; i += 1) {
+      const res = await loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: "brute", password: "x" } }));
+      last = res.status;
+    }
+    expect(last).toBe(429);
+    loginLimiter.reset();
+  });
+});
+
+describe("Производственная модель и тур", () => {
+  it("возвращает участки со стабильными идентификаторами и граф процесса", async () => {
+    const res = await modelRoute.GET(request("/api/model", { cookie: viewer }));
+    const body = await res.json();
+    expect(body.stations.map((s: { id: string }) => s.id)).toEqual([...STATION_IDS]);
+    expect(body.nodes.length).toBeGreaterThan(5);
+    const nodeIds = new Set(body.nodes.map((n: { id: string }) => n.id));
+    for (const e of body.edges) {
+      expect(nodeIds.has(e.from)).toBe(true);
+      expect(nodeIds.has(e.to)).toBe(true);
+    }
+    // Каждый участок связан с точкой интереса 3D-тура.
+    for (const s of body.stations) expect(s.poiId).toBeTruthy();
+  });
+  it("ресурсы привязаны к участкам", async () => {
+    const body = await (await resourcesRoute.GET(request("/api/resources", { cookie: viewer }))).json();
+    expect(body.resources.length).toBe(STATION_IDS.length);
+  });
+  it("точки интереса ссылаются на существующие участки", async () => {
+    const body = await (await poisRoute.GET(request("/api/pois", { cookie: viewer }))).json();
+    for (const p of body.pois) if (p.stationId) expect(STATION_IDS).toContain(p.stationId);
+  });
+  it("состояние тура содержит метрики прогона по тем же stationId", async () => {
+    const body = await (await tourRoute.GET(request("/api/tour", { cookie: viewer }))).json();
+    expect(body.run).not.toBeNull();
+    expect(body.run.isBaselineScenario).toBe(true);
+    const stationIds = body.run.stations.map((s: { stationId: string }) => s.stationId);
+    for (const p of body.pois) if (p.stationId) expect(stationIds).toContain(p.stationId);
+    expect(body.tours[0].stops.length).toBeGreaterThan(3);
+  });
+  it("метрики участка (выбор станции) и обработка неизвестного id", async () => {
+    const ok = await stationMetricsRoute.GET(request("/api/stations/st-testing/metrics", { cookie: viewer }), ctx("st-testing"));
+    const body = await ok.json();
+    expect(body.station.stationId).toBe("st-testing");
+    expect(body.station.metrics.utilization.mean).toBeGreaterThan(0);
+    const missing = await stationMetricsRoute.GET(request("/api/stations/st-unknown/metrics", { cookie: viewer }), ctx("st-unknown"));
+    expect(missing.status).toBe(404);
+  });
+});
+
+describe("Сценарии и моделирование", () => {
+  let createdId = "";
+  let runId = "";
+
+  it("наблюдатель не может создавать сценарии и запускать моделирование", async () => {
+    const res = await scenariosRoute.POST(
+      request("/api/scenarios", { method: "POST", cookie: viewer, body: { name: "Попытка", parameters: BASELINE_PARAMETERS } }),
+    );
+    expect(res.status).toBe(403);
+    const run = await runRoute.POST(request("/api/scenarios/sc-baseline/run", { method: "POST", cookie: viewer }), ctx("sc-baseline"));
+    expect(run.status).toBe(403);
+  });
+
+  it("инженер создаёт сценарий", async () => {
+    const params = {
+      ...BASELINE_PARAMETERS,
+      replications: 5,
+      stations: { ...BASELINE_PARAMETERS.stations, "st-machining": { ...BASELINE_PARAMETERS.stations["st-machining"], capacity: 4 } },
+    };
+    const res = await scenariosRoute.POST(
+      request("/api/scenarios", { method: "POST", cookie: engineer, body: { name: "Четвёртый станок ЧПУ", description: "тест", parameters: params } }),
+    );
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    createdId = body.scenario.id;
+    expect(body.scenario.parameters.stations["st-machining"].capacity).toBe(4);
+  });
+
+  it("валидация отклоняет недопустимые параметры", async () => {
+    const bad = { ...BASELINE_PARAMETERS, defectProbability: 1.5 };
+    const res = await scenariosRoute.POST(request("/api/scenarios", { method: "POST", cookie: engineer, body: { name: "Плохой", parameters: bad } }));
+    expect(res.status).toBe(400);
+    const tri = {
+      ...BASELINE_PARAMETERS,
+      stations: { ...BASELINE_PARAMETERS.stations, "st-assembly": { ...BASELINE_PARAMETERS.stations["st-assembly"], processTime: { kind: "triangular", min: 30, mode: 10, max: 40 } } },
+    };
+    const res2 = await scenariosRoute.POST(request("/api/scenarios", { method: "POST", cookie: engineer, body: { name: "Плохой 2", parameters: tri } }));
+    expect(res2.status).toBe(400);
+  });
+
+  it("CSRF: запрос с чужого Origin отклоняется", async () => {
+    const res = await scenariosRoute.POST(
+      request("/api/scenarios", { method: "POST", cookie: engineer, origin: "https://evil.example", body: { name: "CSRF", parameters: BASELINE_PARAMETERS } }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("редактирует и сохраняет сценарий", async () => {
+    const res = await scenarioRoute.PUT(
+      request(`/api/scenarios/${createdId}`, { method: "PUT", cookie: engineer, body: { name: "Четвёртый станок ЧПУ (ред.)" } }),
+      ctx(createdId),
+    );
+    expect(res.status).toBe(200);
+    const got = await (await scenarioRoute.GET(request(`/api/scenarios/${createdId}`, { cookie: viewer }), ctx(createdId))).json();
+    expect(got.scenario.name).toBe("Четвёртый станок ЧПУ (ред.)");
+  });
+
+  it("базовый сценарий защищён от изменения параметров и удаления", async () => {
+    const res = await scenarioRoute.PUT(
+      request("/api/scenarios/sc-baseline", { method: "PUT", cookie: engineer, body: { parameters: BASELINE_PARAMETERS } }),
+      ctx("sc-baseline"),
+    );
+    expect(res.status).toBe(409);
+    const del = await scenarioRoute.DELETE(request("/api/scenarios/sc-baseline", { method: "DELETE", cookie: engineer }), ctx("sc-baseline"));
+    expect(del.status).toBe(409);
+  });
+
+  it("неизвестный сценарий → 404", async () => {
+    const res = await scenarioRoute.GET(request("/api/scenarios/nope", { cookie: viewer }), ctx("nope"));
+    expect(res.status).toBe(404);
+  });
+
+  it("запускает моделирование и сохраняет результат", async () => {
+    const res = await runRoute.POST(request(`/api/scenarios/${createdId}/run`, { method: "POST", cookie: engineer }), ctx(createdId));
+    expect(res.status).toBe(201);
+    const { run } = await res.json();
+    runId = run.id;
+    expect(run.replications).toBe(5);
+    expect(run.aggregate.completed.n).toBe(5);
+    expect(run.stations.find((s: { stationId: string }) => s.stationId === "st-machining").metrics.capacity.mean).toBe(4);
+    const list = await (await runsRoute.GET(request(`/api/runs?scenarioId=${createdId}`, { cookie: viewer }))).json();
+    expect(list.runs.map((r: { id: string }) => r.id)).toContain(runId);
+    const detail = await runDetailRoute.GET(request(`/api/runs/${runId}`, { cookie: viewer }), ctx(runId));
+    expect(detail.status).toBe(200);
+  });
+
+  it("журнал воспроизведения содержит упорядоченные события и кадры", async () => {
+    const body = await (await replayRoute.GET(request(`/api/runs/${runId}/replay`, { cookie: viewer }), ctx(runId))).json();
+    expect(body.events.length).toBeGreaterThan(100);
+    expect(body.snapshots.length).toBeGreaterThan(10);
+    for (let i = 1; i < body.events.length; i += 1) expect(body.events[i][0]).toBeGreaterThanOrEqual(body.events[i - 1][0]);
+  });
+
+  it("повторный запуск того же сценария воспроизводит те же средние", async () => {
+    const res = await runRoute.POST(request(`/api/scenarios/${createdId}/run`, { method: "POST", cookie: engineer }), ctx(createdId));
+    const { run } = await res.json();
+    const first = await (await runDetailRoute.GET(request(`/api/runs/${runId}`, { cookie: viewer }), ctx(runId))).json();
+    expect(run.aggregate.completed.mean).toBe(first.run.aggregate.completed.mean);
+    expect(run.aggregate.cycleTimeAvgMin.mean).toBe(first.run.aggregate.cycleTimeAvgMin.mean);
+  });
+
+  it("сравнивает прогон с базовым", async () => {
+    const tour = await (await tourRoute.GET(request("/api/tour", { cookie: viewer }))).json();
+    const baselineRunId = tour.run.id;
+    const res = await compareRoute.GET(request(`/api/compare?baseline=${baselineRunId}&runs=${runId}`, { cookie: viewer }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const alt = body.alternatives[0];
+    expect(alt.run.id).toBe(runId);
+    expect(alt.parameterChanges.some((c: { path: string }) => c.path === "stations.st-machining.capacity")).toBe(true);
+    const completed = alt.aggregate.find((m: { key: string }) => m.key === "completed");
+    expect(completed.absDiff).toBeCloseTo(completed.after - completed.before, 6);
+    expect(["better", "worse", "unchanged"]).toContain(completed.verdict);
+    expect(body.method).toContain("Уэлча");
+  });
+
+  it("сравнение с неизвестным прогоном → 404, без параметров → 400", async () => {
+    const tour = await (await tourRoute.GET(request("/api/tour", { cookie: viewer }))).json();
+    const res = await compareRoute.GET(request(`/api/compare?baseline=${tour.run.id}&runs=missing`, { cookie: viewer }));
+    expect(res.status).toBe(404);
+    const res2 = await compareRoute.GET(request(`/api/compare`, { cookie: viewer }));
+    expect(res2.status).toBe(400);
+  });
+
+  it("копирует сценарий", async () => {
+    const res = await copyRoute.POST(request(`/api/scenarios/sc-baseline/copy`, { method: "POST", cookie: engineer }), ctx("sc-baseline"));
+    expect(res.status).toBe(201);
+    const { scenario } = await res.json();
+    expect(scenario.parentScenarioId).toBe("sc-baseline");
+    expect(scenario.isBaseline).toBe(false);
+  });
+
+  it("ограничивает частоту запусков моделирования", async () => {
+    simulationLimiter.reset();
+    let last = 0;
+    for (let i = 0; i < 13; i += 1) {
+      const res = await runRoute.POST(request(`/api/scenarios/${createdId}/run`, { method: "POST", cookie: engineer }), ctx(createdId));
+      last = res.status;
+    }
+    expect(last).toBe(429);
+    simulationLimiter.reset();
+  });
+
+  it("удаляет сценарий вместе с прогонами; удаление прогонов — только admin", async () => {
+    const delRunByEngineer = await runDetailRoute.DELETE(request(`/api/runs/${runId}`, { method: "DELETE", cookie: engineer }), ctx(runId));
+    expect(delRunByEngineer.status).toBe(403);
+    const delRun = await runDetailRoute.DELETE(request(`/api/runs/${runId}`, { method: "DELETE", cookie: admin }), ctx(runId));
+    expect(delRun.status).toBe(200);
+    const res = await scenarioRoute.DELETE(request(`/api/scenarios/${createdId}`, { method: "DELETE", cookie: engineer }), ctx(createdId));
+    expect(res.status).toBe(200);
+    const list = await (await runsRoute.GET(request(`/api/runs?scenarioId=${createdId}`, { cookie: viewer }))).json();
+    expect(list.runs.length).toBe(0);
+  });
+
+  it("список пользователей доступен только администратору и не содержит хешей", async () => {
+    expect((await usersRoute.GET(request("/api/admin/users", { cookie: engineer }))).status).toBe(403);
+    const body = await (await usersRoute.GET(request("/api/admin/users", { cookie: admin }))).json();
+    expect(body.users.length).toBe(3);
+    expect(JSON.stringify(body)).not.toContain("passwordHash");
+  });
+});

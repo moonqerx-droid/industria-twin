@@ -1,0 +1,18 @@
+node_modules
+.next
+out
+*.tsbuildinfo
+next-env.d.ts
+.env
+prisma/*.db
+prisma/*.db-journal
+test-results
+playwright-report
+coverage
+.DS_Store
+
+.claude/settings.local.json
+
+# Материалы организаторов не публикуются в открытом репозитории (см. docs/source/README.md)
+docs/source/*.pptx
+.playwright-mcp
