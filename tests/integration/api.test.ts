@@ -22,8 +22,7 @@ import * as auditRoute from "@/app/api/admin/audit/route";
 import * as passwordRoute from "@/app/api/auth/password/route";
 import { BASELINE_PARAMETERS, STATION_IDS } from "@/domain/model/demoData";
 import { demoAccounts } from "@/server/services/seedService";
-import { adviceLimiter, loginLimiter, passwordChangeLimiter, simulationLimiter } from "@/server/rateLimit";
-import { resetLoginThrottle, throttleDelayMs, THROTTLE } from "@/server/auth/loginThrottle";
+import { adviceLimiter, deviceLoginLimiter, loginLimiter, passwordChangeLimiter, simulationLimiter } from "@/server/rateLimit";
 
 const BASE = "http://localhost:3000";
 const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
@@ -56,7 +55,7 @@ let admin = "";
 
 beforeAll(async () => {
   loginLimiter.reset();
-  resetLoginThrottle({ baseDelayMs: 1 });
+  deviceLoginLimiter.reset();
   simulationLimiter.reset();
   engineer = await login("engineer");
   viewer = await login("viewer");
@@ -92,62 +91,54 @@ describe("Аутентификация", () => {
     const res = await meRoute.GET(request("/api/auth/me", { cookie }));
     expect(res.status).toBe(401);
   });
-  it("за доверенным прокси ограничивает попытки входа с одного адреса (429)", async () => {
+  it("без cookie устройства ограничивает попытки входа на логин (429), независимо от X-Forwarded-For", async () => {
     loginLimiter.reset();
-    resetLoginThrottle({ baseDelayMs: 1 });
-    process.env.TRUST_PROXY = "1";
-    try {
-      let last = 0;
-      for (let i = 0; i < 11; i += 1) {
-        const req = request("/api/auth/login", { method: "POST", body: { login: "brute", password: "x" } });
-        req.headers.set("x-forwarded-for", "203.0.113.7");
-        last = (await loginRoute.POST(req)).status;
-      }
-      expect(last).toBe(429);
-    } finally {
-      delete process.env.TRUST_PROXY;
-      loginLimiter.reset();
-      resetLoginThrottle({ baseDelayMs: 1 });
+    let last = 0;
+    for (let i = 0; i < 11; i += 1) {
+      const req = request("/api/auth/login", { method: "POST", body: { login: "brute", password: "x" } });
+      req.headers.set("x-forwarded-for", `10.0.0.${i}`);
+      last = (await loginRoute.POST(req)).status;
     }
+    expect(last).toBe(429);
+    loginLimiter.reset();
   });
 
-  it("параллельный перебор невозможен: одна попытка на логин одновременно", async () => {
-    resetLoginThrottle({ baseDelayMs: 1 });
+  it("параллельный перебор не обходит лимит (попытка регистрируется до проверки пароля)", async () => {
+    loginLimiter.reset();
     const statuses = await Promise.all(
       Array.from({ length: 20 }, () => loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: "viewer", password: "guess" } })).then((r) => r.status)),
     );
-    expect(statuses.filter((x) => x === 401).length).toBeLessThanOrEqual(3);
-    expect(statuses.filter((x) => x === 429).length).toBeGreaterThanOrEqual(17);
-    resetLoginThrottle({ baseDelayMs: 1 });
+    expect(statuses.filter((x) => x === 401).length).toBeLessThanOrEqual(10);
+    expect(statuses.filter((x) => x === 429).length).toBeGreaterThanOrEqual(10);
+    loginLimiter.reset();
   });
 
-  it("смена X-Forwarded-For без TRUST_PROXY не обходит замедление по логину", async () => {
-    resetLoginThrottle({ baseDelayMs: 1 });
-    for (let i = 0; i < 12; i += 1) {
-      const req = request("/api/auth/login", { method: "POST", body: { login: "viewer", password: "guess" } });
-      req.headers.set("x-forwarded-for", `10.0.0.${i}`);
-      expect((await loginRoute.POST(req)).status).toBe(401);
-    }
-    expect(throttleDelayMs("viewer")).toBeGreaterThan(0);
-    resetLoginThrottle({ baseDelayMs: 1 });
-  });
-
-  it("посторонний не может заблокировать вход: после серии неудач владелец входит с верным паролем", async () => {
-    resetLoginThrottle({ baseDelayMs: 1 });
+  it("посторонний не блокирует владельца: вход с доверенного устройства при исчерпанном лимите", async () => {
+    loginLimiter.reset();
+    deviceLoginLimiter.reset();
     const acc = demoAccounts().find((a) => a.role === "viewer")!;
-    for (let i = 0; i < 12; i += 1) {
-      await loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: acc.login, password: `attack${i}` } }));
-    }
-    expect(throttleDelayMs(acc.login)).toBeGreaterThan(0);
-    const ok = await loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: acc.login, password: acc.password } }));
-    expect(ok.status).toBe(200);
-    expect(throttleDelayMs(acc.login)).toBe(0);
-  });
-
-  it("задержка растёт экспоненциально после бесплатных попыток и ограничена сверху", () => {
-    resetLoginThrottle();
-    expect(throttleDelayMs("nobody")).toBe(0);
-    expect(THROTTLE.MAX_DELAY_MS).toBeLessThanOrEqual(5_000);
+    // Владелец ранее входил с этого устройства и получил cookie устройства.
+    const first = await loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: acc.login, password: acc.password } }));
+    const deviceCookie = first.headers.getSetCookie().find((c) => c.startsWith("it_device="))!.split(";")[0]!;
+    expect(deviceCookie).toBeTruthy();
+    // Посторонний исчерпывает лимит по логину.
+    for (let i = 0; i < 11; i += 1) await loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: acc.login, password: `attack${i}` } }));
+    expect((await loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: acc.login, password: acc.password } }))).status).toBe(429);
+    // С доверенного устройства владелец входит.
+    const owner = await loginRoute.POST(request("/api/auth/login", { method: "POST", cookie: deviceCookie, body: { login: acc.login, password: acc.password } }));
+    expect(owner.status).toBe(200);
+    // Cookie устройства от другой учётной записи не даёт обхода лимита.
+    const other = await loginRoute.POST(request("/api/auth/login", { method: "POST", cookie: deviceCookie, body: { login: "brute2", password: "x" } }));
+    expect(other.status).toBe(401);
+    for (let i = 0; i < 10; i += 1) await loginRoute.POST(request("/api/auth/login", { method: "POST", cookie: deviceCookie, body: { login: "brute2", password: "x" } }));
+    expect((await loginRoute.POST(request("/api/auth/login", { method: "POST", cookie: deviceCookie, body: { login: "brute2", password: "x" } }))).status).toBe(429);
+    // Перебор с доверенного устройства тоже ограничен (отдельный счётчик по устройству).
+    deviceLoginLimiter.reset();
+    let last = 0;
+    for (let i = 0; i < 11; i += 1) last = (await loginRoute.POST(request("/api/auth/login", { method: "POST", cookie: deviceCookie, body: { login: acc.login, password: `x${i}` } }))).status;
+    expect(last).toBe(429);
+    loginLimiter.reset();
+    deviceLoginLimiter.reset();
   });
 
   it("успешные входы не расходуют лимит, успешный вход сбрасывает счётчик неудач", async () => {

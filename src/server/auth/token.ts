@@ -45,3 +45,35 @@ export async function verifySessionToken(token: string | undefined | null): Prom
     return null;
   }
 }
+
+/**
+ * Cookie доверенного устройства (OWASP «device cookies»): выдаётся после успешного входа и привязана к логину.
+ * Попытки входа с такой cookie учитываются отдельно по устройству, поэтому посторонний, исчерпавший лимит
+ * неудачных попыток по логину, не блокирует владельцу вход с уже знакомого устройства.
+ */
+export const DEVICE_COOKIE = "it_device";
+export const DEVICE_TTL_SECONDS = 90 * 24 * 60 * 60;
+const DEVICE_AUDIENCE = "industria-twin/device";
+
+export async function signDeviceToken(login: string, deviceId: string): Promise<string> {
+  return new SignJWT({ typ: "device" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject(login)
+    .setJti(deviceId)
+    .setIssuedAt()
+    .setExpirationTime(`${DEVICE_TTL_SECONDS}s`)
+    .setIssuer("industria-twin")
+    .setAudience(DEVICE_AUDIENCE)
+    .sign(secretKey());
+}
+
+export async function verifyDeviceToken(token: string | undefined | null): Promise<{ login: string; deviceId: string } | null> {
+  if (!token) return null;
+  try {
+    const { payload } = await jwtVerify(token, secretKey(), { issuer: "industria-twin", audience: DEVICE_AUDIENCE, algorithms: ["HS256"] });
+    if (payload.typ !== "device" || typeof payload.sub !== "string" || typeof payload.jti !== "string") return null;
+    return { login: payload.sub, deviceId: payload.jti };
+  } catch {
+    return null;
+  }
+}

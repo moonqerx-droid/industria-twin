@@ -38,24 +38,12 @@ export class SlidingWindowLimiter {
 /** Не более 12 запусков моделирования в минуту на пользователя. */
 export const simulationLimiter = new SlidingWindowLimiter(12, 60_000);
 /**
- * Не более 10 попыток входа за 5 минут на «логин + достоверный адрес» (только при TRUST_PROXY=1);
- * успешный вход сбрасывает счётчик. Защита по логину без адреса — src/server/auth/loginThrottle.ts.
+ * Попытки входа без cookie доверенного устройства: не более 10 за 15 минут на логин (с любых адресов).
+ * Попытка регистрируется до проверки пароля (параллельные запросы не обходят лимит), успешный вход сбрасывает счётчик.
  */
-export const loginLimiter = new SlidingWindowLimiter(10, 5 * 60_000);
-/**
- * Адрес клиента для ограничителя. Заголовку X-Forwarded-For доверяем только при TRUST_PROXY=1
- * (приложение за собственным обратным прокси), и берём последний адрес — добавленный нашим прокси;
- * иначе заголовок подделывается клиентом и не используется.
- */
-export function clientKey(req: Request): string {
-  if (process.env.TRUST_PROXY === "1") {
-    const parts = (req.headers.get("x-forwarded-for") ?? "").split(",").map((p) => p.trim()).filter(Boolean);
-    const last = parts[parts.length - 1];
-    if (last) return last;
-    return req.headers.get("x-real-ip")?.trim() || "proxy";
-  }
-  return "direct";
-}
+export const loginLimiter = new SlidingWindowLimiter(10, 15 * 60_000);
+/** Попытки входа с cookie доверенного устройства: не более 10 за 15 минут на пару «логин + устройство». */
+export const deviceLoginLimiter = new SlidingWindowLimiter(10, 15 * 60_000);
 
 export function enforce(limiter: SlidingWindowLimiter, key: string): void {
   const r = limiter.check(key);
