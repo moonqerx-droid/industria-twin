@@ -1,6 +1,6 @@
 import { sampleDuration, sampleInterArrival, validateDistribution } from "./distributions";
 import { EventCalendar } from "./eventQueue";
-import { createRng, type Rng } from "./rng";
+import { createRng, splitmix32, type Rng } from "./rng";
 import {
   ENGINE_LIMITS,
   ENGINE_VERSION,
@@ -25,6 +25,28 @@ import {
  * Модуль не зависит от UI, React, базы данных и сети.
  */
 
+/**
+ * Общие случайные числа (Common Random Numbers, CRN).
+ *
+ * Каждый источник случайности получает собственный поток, зависящий только от seed и «адреса» события:
+ *  - поток поступлений — один на прогон;
+ *  - длительность операции — (изделие, участок, номер посещения участка этим изделием);
+ *  - исход контроля качества — (изделие, номер проверки).
+ * Поэтому в двух сценариях с одинаковым seed одно и то же изделие получает одинаковые длительности
+ * операций и одинаковую «судьбу» на контроле, даже если изменились мощности или порядок обслуживания.
+ * Различия результатов вызваны изменением параметров, а не перетасовкой случайных чисел, —
+ * это резко снижает дисперсию оценки разности и позволяет использовать парное сравнение.
+ */
+const STREAM = { ARRIVAL: 1, SERVICE: 2, QUALITY: 3, FAILURE: 4, REPAIR: 5 } as const;
+
+export function streamSeed(seed: number, stream: number, a = 0, b = 0, c = 0): number {
+  let h = splitmix32((seed >>> 0) ^ Math.imul(stream, 0x27d4eb2d));
+  h = splitmix32(h ^ (a >>> 0));
+  h = splitmix32(h ^ Math.imul(b + 1, 0x165667b1));
+  h = splitmix32(h ^ Math.imul(c + 1, 0x9e3779b1));
+  return h;
+}
+
 export class SimulationConfigError extends Error {
   constructor(public readonly issues: string[]) {
     super(`Некорректная конфигурация симуляции: ${issues.join("; ")}`);
@@ -33,11 +55,13 @@ export class SimulationConfigError extends Error {
 }
 
 /** Приоритеты при совпадении времени: сначала освобождаем ресурсы, затем приходы, горизонт — последним. */
-const PRIORITY = { PROCESS_FINISH: 0, ARRIVAL: 1, HORIZON_END: 9 } as const;
+const PRIORITY = { PROCESS_FINISH: 0, REPAIR_END: 0, FAILURE: 1, ARRIVAL: 2, HORIZON_END: 9 } as const;
 
 type CalendarPayload =
   | { type: "ARRIVAL" }
   | { type: "PROCESS_FINISH"; stationId: string; unitId: number }
+  | { type: "FAILURE"; stationId: string }
+  | { type: "REPAIR_END"; stationId: string }
   | { type: "HORIZON_END" };
 
 interface UnitState {
@@ -46,6 +70,9 @@ interface UnitState {
   routeIndex: number;
   reworkCycles: number;
   inRework: boolean;
+  /** Число посещений каждого участка (индекс участка в конфигурации) — адрес потока CRN. */
+  visits: number[];
+  qualityChecks: number;
   queueEnterMin: number;
   serviceStartMin: number;
   waitingMin: number;
@@ -69,6 +96,14 @@ interface StationState {
   waitSum: number;
   maxWait: number;
   consumablesCostRub: number;
+  /** Единицы ресурса в ремонте. */
+  down: number;
+  /** Отказы, ожидающие завершения текущей операции (неупреждающая модель). */
+  pendingFailures: number;
+  downIntegral: number;
+  failures: number;
+  failureRng: Rng | null;
+  repairRng: Rng | null;
 }
 
 export function validateConfig(config: SimulationConfig): string[] {
@@ -96,6 +131,10 @@ export function validateConfig(config: SimulationConfig): string[] {
     nonNeg(`${s.stationId}: стоимость часа`, s.hourlyCostRub);
     nonNeg(`${s.stationId}: расходные материалы`, s.consumablesPerOperationRub);
     for (const e of validateDistribution(s.processTime)) issues.push(`${s.stationId}: ${e}`);
+    if (s.failure) {
+      if (!Number.isFinite(s.failure.mtbfMin) || s.failure.mtbfMin < 1) issues.push(`${s.stationId}: MTBF должен быть ≥ 1 мин`);
+      if (!Number.isFinite(s.failure.mttrMin) || s.failure.mttrMin <= 0) issues.push(`${s.stationId}: MTTR должен быть > 0 мин`);
+    }
   }
   for (const id of config.route) if (!ids.has(id)) issues.push(`маршрут ссылается на неизвестную станцию ${id}`);
   if (new Set(config.route).size !== config.route.length) issues.push("станция не может повторяться в основном маршруте");
@@ -133,10 +172,11 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
   const arrivalStop = Math.min(config.arrivalStopMin ?? horizon, horizon);
   const snapshotStep = config.snapshotIntervalMin ?? 10;
   const recordEvents = config.recordEvents ?? false;
-  const rng: Rng = createRng(config.seed);
+  const arrivalRng: Rng = createRng(streamSeed(config.seed, STREAM.ARRIVAL));
+  const stationIndex = new Map(config.stations.map((cfg, i) => [cfg.stationId, i]));
 
   const stations = new Map<string, StationState>();
-  for (const cfg of config.stations) {
+  for (const [i, cfg] of config.stations.entries()) {
     stations.set(cfg.stationId, {
       cfg,
       queue: [],
@@ -152,6 +192,12 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
       waitSum: 0,
       maxWait: 0,
       consumablesCostRub: 0,
+      down: 0,
+      pendingFailures: 0,
+      downIntegral: 0,
+      failures: 0,
+      failureRng: cfg.failure ? createRng(streamSeed(config.seed, STREAM.FAILURE, i)) : null,
+      repairRng: cfg.failure ? createRng(streamSeed(config.seed, STREAM.REPAIR, i)) : null,
     });
   }
 
@@ -192,6 +238,7 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
     if (dt > 0) {
       s.busyIntegral += s.busy * dt;
       s.queueIntegral += queueLength(s) * dt;
+      s.downIntegral += s.down * dt;
     }
     s.lastChangeMin = now;
   };
@@ -205,8 +252,8 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
   const takeSnapshotsUntil = (time: number) => {
     // Состояние постоянно между событиями, поэтому кадр в момент t < time отражает текущее состояние.
     while (nextSnapshotMin <= horizon && nextSnapshotMin < time) {
-      const st: Record<string, [number, number]> = {};
-      for (const [id, s] of stations) st[id] = [queueLength(s), s.busy];
+      const st: Record<string, [number, number, number]> = {};
+      for (const [id, s] of stations) st[id] = [queueLength(s), s.busy, s.down];
       snapshots.push({ t: nextSnapshotMin, wip, completed: completedCount, scrapped: scrappedCount, stations: st });
       nextSnapshotMin += snapshotStep;
     }
@@ -218,8 +265,31 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
     return s;
   };
 
+  /** Переводит ожидающие отказы в ремонт, если есть незанятые исправные единицы. */
+  const applyFailures = (s: StationState) => {
+    while (s.pendingFailures > 0 && s.busy + s.down < s.cfg.capacity) {
+      touchStation(s);
+      s.pendingFailures -= 1;
+      s.down += 1;
+      s.failures += 1;
+      log("BREAKDOWN", 0, s.cfg.stationId);
+      const mttr = s.cfg.failure!.mttrMin;
+      calendar.schedule(now + -mttr * Math.log(1 - s.repairRng!.next()), PRIORITY.REPAIR_END, {
+        type: "REPAIR_END",
+        stationId: s.cfg.stationId,
+      });
+    }
+  };
+
+  const scheduleNextFailure = (s: StationState) => {
+    const f = s.cfg.failure;
+    if (!f || !s.failureRng) return;
+    const t = now + (-f.mtbfMin / s.cfg.capacity) * Math.log(1 - s.failureRng.next());
+    if (t < horizon) calendar.schedule(t, PRIORITY.FAILURE, { type: "FAILURE", stationId: s.cfg.stationId });
+  };
+
   const startService = (s: StationState) => {
-    while (s.busy < s.cfg.capacity && queueLength(s) > 0) {
+    while (s.busy + s.down < s.cfg.capacity && queueLength(s) > 0) {
       touchStation(s);
       const unitId = s.queue[s.queueHead]!;
       s.queueHead += 1;
@@ -238,7 +308,13 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
       s.consumablesCostRub += s.cfg.consumablesPerOperationRub;
       unit.serviceStartMin = now;
       log("PROCESS_START", unitId, s.cfg.stationId);
-      const duration = sampleDuration(s.cfg.processTime, rng);
+      const stIdx = stationIndex.get(s.cfg.stationId)!;
+      const visit = unit.visits[stIdx] ?? 0;
+      unit.visits[stIdx] = visit + 1;
+      const duration = sampleDuration(
+        s.cfg.processTime,
+        createRng(streamSeed(config.seed, STREAM.SERVICE, unitId, stIdx, visit)),
+      );
       calendar.schedule(now + duration, PRIORITY.PROCESS_FINISH, {
         type: "PROCESS_FINISH",
         stationId: s.cfg.stationId,
@@ -287,6 +363,8 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
     const unit = units.get(unitId)!;
     unit.processingMin += now - unit.serviceStartMin;
     log("PROCESS_FINISH", unitId, stationId);
+    // Ожидающий отказ останавливает освободившуюся единицу раньше, чем она возьмёт следующее задание.
+    applyFailures(s);
     // Освободившийся ресурс сразу берёт следующее задание из очереди (FIFO).
     startService(s);
 
@@ -299,7 +377,9 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
     if (q && stationId === q.stationId) {
       qualityChecks += 1;
       const p = unit.reworkCycles === 0 ? q.defectProbability : q.retestDefectProbability;
-      const defect = rng.next() < p;
+      const check = unit.qualityChecks;
+      unit.qualityChecks += 1;
+      const defect = createRng(streamSeed(config.seed, STREAM.QUALITY, unitId, check)).next() < p;
       log("QUALITY_CHECK", unitId, stationId, defect);
       if (defect) {
         defectsFound += 1;
@@ -319,7 +399,7 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
   };
 
   const scheduleNextArrival = () => {
-    const gap = sampleInterArrival(config.arrival.kind, config.arrival.ratePerHour, rng);
+    const gap = sampleInterArrival(config.arrival.kind, config.arrival.ratePerHour, arrivalRng);
     const t = now + gap;
     if (t < arrivalStop) calendar.schedule(t, PRIORITY.ARRIVAL, { type: "ARRIVAL" });
   };
@@ -330,6 +410,7 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
     else scheduleNextArrival();
   }
   calendar.schedule(horizon, PRIORITY.HORIZON_END, { type: "HORIZON_END" });
+  for (const s of stations.values()) scheduleNextFailure(s);
 
   for (;;) {
     const entry = calendar.pop();
@@ -345,13 +426,27 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
       log("HORIZON_END", 0, null);
       break;
     }
-    if (ev.type === "ARRIVAL") {
+    if (ev.type === "FAILURE") {
+      const s = getStation(ev.stationId);
+      s.pendingFailures += 1;
+      applyFailures(s);
+      scheduleNextFailure(s);
+    } else if (ev.type === "REPAIR_END") {
+      const s = getStation(ev.stationId);
+      touchStation(s);
+      s.down -= 1;
+      log("REPAIR", 0, s.cfg.stationId);
+      applyFailures(s);
+      startService(s);
+    } else if (ev.type === "ARRIVAL") {
       const unit: UnitState = {
         id: nextUnitId++,
         arrivalMin: now,
         routeIndex: 0,
         reworkCycles: 0,
         inRework: false,
+        visits: [],
+        qualityChecks: 0,
         queueEnterMin: now,
         serviceStartMin: now,
         waitingMin: 0,
@@ -401,11 +496,14 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
   let consumablesCost = 0;
   let idleCost = 0;
   let avgQueueTotal = 0;
+  let failuresTotal = 0;
+  let downtimeTotal = 0;
   for (const s of stations.values()) {
     const capMin = s.cfg.capacity * horizon;
     const utilization = capMin > 0 ? Math.min(1, s.busyIntegral / capMin) : 0;
     const rc = s.cfg.capacity * horizonHours * s.cfg.hourlyCostRub;
-    const ic = (Math.max(0, capMin - s.busyIntegral) / 60) * s.cfg.hourlyCostRub;
+    // Простой — время, когда исправная единица ресурса не занята (ремонт учитывается отдельно).
+    const ic = (Math.max(0, capMin - s.busyIntegral - s.downIntegral) / 60) * s.cfg.hourlyCostRub;
     busyTotal += s.busyIntegral;
     capacityTotal += capMin;
     resourceCost += rc;
@@ -413,6 +511,8 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
     idleCost += ic;
     const avgQ = s.queueIntegral / horizon;
     avgQueueTotal += avgQ;
+    failuresTotal += s.failures;
+    downtimeTotal += s.downIntegral;
     stationResults.push({
       stationId: s.cfg.stationId,
       name: s.cfg.name,
@@ -432,6 +532,9 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
       consumablesCostRub: s.consumablesCostRub,
       idleCostRub: ic,
       peakBusy: s.peakBusy,
+      failures: s.failures,
+      downtimeMin: s.downIntegral,
+      availability: capMin > 0 ? Math.max(0, 1 - s.downIntegral / capMin) : 1,
     });
   }
 
@@ -468,6 +571,8 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
     totalCostRub: totalCost,
     idleCostRub: idleCost,
     costPerUnitRub: completedCount > 0 ? totalCost / completedCount : null,
+    failures: failuresTotal,
+    downtimeMin: downtimeTotal,
   };
 
   return {

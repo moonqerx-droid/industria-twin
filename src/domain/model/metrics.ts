@@ -42,6 +42,8 @@ export const AGGREGATE_METRICS: Record<AggregateMetricKey, MetricDefinition<Aggr
   totalCostRub: { key: "totalCostRub", label: "Полная стоимость", unit: "₽", direction: "lower", digits: 0, description: "Ресурсы + расходные материалы + компоненты + постоянные расходы." },
   idleCostRub: { key: "idleCostRub", label: "Стоимость простоя", unit: "₽", direction: "lower", digits: 0, description: "Часть стоимости ресурсов, приходящаяся на незанятое время (входит в стоимость ресурсов)." },
   costPerUnitRub: { key: "costPerUnitRub", label: "Стоимость единицы", unit: "₽/шт.", direction: "lower", digits: 0, description: "Полная стоимость / выпуск. Не определена при нулевом выпуске." },
+  failures: { key: "failures", label: "Отказы оборудования", unit: "шт.", direction: "lower", digits: 1, description: "Число отказов единиц ресурса на всех участках за горизонт." },
+  downtimeMin: { key: "downtimeMin", label: "Время в ремонте", unit: "мин", direction: "lower", digits: 0, description: "Суммарное время единиц ресурса в ремонте (станко-мин)." },
 };
 
 /** Ключевые показатели, отображаемые на дашборде и в сравнении по умолчанию. */
@@ -57,6 +59,7 @@ export const KEY_AGGREGATE_METRICS: AggregateMetricKey[] = [
   "reworkCount",
   "totalCostRub",
   "costPerUnitRub",
+  "downtimeMin",
 ];
 
 export type StationMetricKey = Exclude<keyof StationResult, "stationId" | "name">;
@@ -78,6 +81,9 @@ export const STATION_METRICS: Record<StationMetricKey, MetricDefinition<StationM
   consumablesCostRub: { key: "consumablesCostRub", label: "Расходные материалы", unit: "₽", direction: "lower", digits: 0, description: "Начатые операции × расходы на операцию." },
   idleCostRub: { key: "idleCostRub", label: "Стоимость простоя", unit: "₽", direction: "lower", digits: 0, description: "Стоимость незанятого времени ресурса." },
   peakBusy: { key: "peakBusy", label: "Пиковая занятость", unit: "ед.", direction: "neutral", digits: 0, description: "Максимум одновременно занятых единиц ресурса." },
+  failures: { key: "failures", label: "Отказы", unit: "шт.", direction: "lower", digits: 1, description: "Число отказов единиц ресурса участка за горизонт." },
+  downtimeMin: { key: "downtimeMin", label: "Время в ремонте", unit: "мин", direction: "lower", digits: 0, description: "Интеграл числа единиц в ремонте по времени (станко-мин)." },
+  availability: { key: "availability", label: "Доступность", unit: "%", direction: "higher", displayScale: 100, digits: 1, description: "1 − время в ремонте / (вместимость × горизонт)." },
 };
 
 export const KEY_STATION_METRICS: StationMetricKey[] = [

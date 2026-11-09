@@ -6,6 +6,7 @@
  * они получают только число единиц ресурса, число занятых единиц и цвет состояния.
  * Для замены на GLB достаточно реализовать тот же интерфейс EquipmentModelProps (см. ASSET_MANIFEST.md).
  */
+import { Html } from "@react-three/drei";
 import { useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import type * as THREE from "three";
@@ -20,6 +21,8 @@ export interface EquipmentModelProps {
   capacity: number;
   /** Число занятых единиц в текущем кадре (тур — среднее по прогону, воспроизведение — кадр события). */
   busy: number;
+  /** Число единиц в ремонте (только в режиме воспроизведения). */
+  down?: number;
   statusColor: string;
   footprint: [number, number];
 }
@@ -37,7 +40,10 @@ function Cyl({ p, s, m, r, low }: { p: Vec3; s: Vec3; m: THREE.Material; r?: Vec
 /** Сигнальная колонна (андон): нижняя секция — работа, верхние — предупреждение/авария. */
 export function StackLight({ position, statusColor, active }: { position: Vec3; statusColor: string; active: boolean }) {
   const { m } = useSceneResources();
-  const lit = (c: string) => (active && statusColor === c ? emissiveMaterial(c) : m.lampOff);
+  // Единица в ремонте: горит только красная секция, независимо от занятости.
+  const broken = statusColor === BROKEN_COLOR;
+  const lit = (c: string) =>
+    broken ? (c === "#d2412f" ? emissiveMaterial(c) : m.lampOff) : active && statusColor === c ? emissiveMaterial(c) : m.lampOff;
   return (
     <group position={position}>
       <Cyl p={[0, 0.25, 0]} s={[0.05, 0.5, 0.05]} m={m.darkSteel} low />
@@ -256,7 +262,36 @@ function PickingStation({ position, active, statusColor }: { position: Vec3; act
   );
 }
 
-export function EquipmentModel({ kind, capacity, busy, statusColor, footprint }: EquipmentModelProps) {
+/**
+ * Маркер ремонта (режим воспроизведения): ограждение из стоек с сигнальной лентой и выноска «Ремонт».
+ * Показывается над единицей оборудования, выведенной из работы из-за отказа.
+ */
+function RepairMarker({ position }: { position: Vec3 }) {
+  const { m } = useSceneResources();
+  const tape = emissiveMaterial(BROKEN_COLOR);
+  const w = 1.7;
+  const d = 1.45;
+  const corners: Array<[number, number]> = [[-w, -d], [w, -d], [w, d], [-w, d]];
+  return (
+    <group position={position}>
+      {corners.map(([x, z]) => (
+        <Cyl key={`${x}${z}`} p={[x, 0.45, z]} s={[0.07, 0.9, 0.07]} m={m.darkSteel} low />
+      ))}
+      <Box p={[0, 0.78, -d]} s={[w * 2, 0.06, 0.03]} m={tape} />
+      <Box p={[0, 0.78, d]} s={[w * 2, 0.06, 0.03]} m={tape} />
+      <Box p={[-w, 0.78, 0]} s={[0.03, 0.06, d * 2]} m={tape} />
+      <Box p={[w, 0.78, 0]} s={[0.03, 0.06, d * 2]} m={tape} />
+      <Html position={[0, 3.1, 0]} center zIndexRange={[15, 0]} style={{ pointerEvents: "none" }}>
+        <span className="whitespace-nowrap rounded-full bg-[#c0392b] px-2 py-0.5 text-[11px] font-semibold text-white shadow">Ремонт</span>
+      </Html>
+    </group>
+  );
+}
+
+/** Цвет сигнальной колонны единицы оборудования в ремонте. */
+export const BROKEN_COLOR = "#e0362c";
+
+export function EquipmentModel({ kind, capacity, busy, down = 0, statusColor, footprint }: EquipmentModelProps) {
   const { m } = useSceneResources();
   const span = footprint[0] - 1.5;
   switch (kind) {
@@ -267,7 +302,10 @@ export function EquipmentModel({ kind, capacity, busy, statusColor, footprint }:
             <Rack key={x} position={[x, 0, -3.2]} />
           ))}
           {slots(capacity, span, 2.4).map((x, i) => (
-            <PickingStation key={i} position={[x, 0, 1.4]} active={i < busy} statusColor={statusColor} />
+            <group key={i}>
+              <PickingStation position={[x, 0, 1.4]} active={i < busy} statusColor={i >= capacity - down ? BROKEN_COLOR : statusColor} />
+              {i >= capacity - down && <RepairMarker position={[x, 0, 1.4]} />}
+            </group>
           ))}
         </group>
       );
@@ -275,7 +313,10 @@ export function EquipmentModel({ kind, capacity, busy, statusColor, footprint }:
       return (
         <group>
           {slots(capacity, span, 3.6).map((x, i) => (
-            <CncMachine key={i} position={[x, 0, -1]} active={i < busy} statusColor={statusColor} />
+            <group key={i}>
+              <CncMachine position={[x, 0, -1]} active={i < busy} statusColor={i >= capacity - down ? BROKEN_COLOR : statusColor} />
+              {i >= capacity - down && <RepairMarker position={[x, 0, -1]} />}
+            </group>
           ))}
         </group>
       );
@@ -283,7 +324,10 @@ export function EquipmentModel({ kind, capacity, busy, statusColor, footprint }:
       return (
         <group>
           {slots(capacity, span, 3.4).map((x, i) => (
-            <AssemblyPost key={i} position={[x, 0, -0.8]} active={i < busy} statusColor={statusColor} />
+            <group key={i}>
+              <AssemblyPost position={[x, 0, -0.8]} active={i < busy} statusColor={i >= capacity - down ? BROKEN_COLOR : statusColor} />
+              {i >= capacity - down && <RepairMarker position={[x, 0, -0.8]} />}
+            </group>
           ))}
         </group>
       );
@@ -291,7 +335,10 @@ export function EquipmentModel({ kind, capacity, busy, statusColor, footprint }:
       return (
         <group>
           {slots(capacity, span, 3.8).map((x, i) => (
-            <TestBench key={i} position={[x, 0, -1]} active={i < busy} statusColor={statusColor} />
+            <group key={i}>
+              <TestBench position={[x, 0, -1]} active={i < busy} statusColor={i >= capacity - down ? BROKEN_COLOR : statusColor} />
+              {i >= capacity - down && <RepairMarker position={[x, 0, -1]} />}
+            </group>
           ))}
         </group>
       );
@@ -299,7 +346,10 @@ export function EquipmentModel({ kind, capacity, busy, statusColor, footprint }:
       return (
         <group>
           {slots(capacity, span, 3.4).map((x, i) => (
-            <ReworkPost key={i} position={[x, 0, 0]} active={i < busy} statusColor={statusColor} />
+            <group key={i}>
+              <ReworkPost position={[x, 0, 0]} active={i < busy} statusColor={i >= capacity - down ? BROKEN_COLOR : statusColor} />
+              {i >= capacity - down && <RepairMarker position={[x, 0, 0]} />}
+            </group>
           ))}
         </group>
       );
@@ -307,7 +357,10 @@ export function EquipmentModel({ kind, capacity, busy, statusColor, footprint }:
       return (
         <group>
           {slots(capacity, span, 3.4).map((x, i) => (
-            <PackingLine key={i} position={[x, 0, -1.5]} active={i < busy} statusColor={statusColor} />
+            <group key={i}>
+              <PackingLine position={[x, 0, -1.5]} active={i < busy} statusColor={i >= capacity - down ? BROKEN_COLOR : statusColor} />
+              {i >= capacity - down && <RepairMarker position={[x, 0, -1.5]} />}
+            </group>
           ))}
           {[-2.5, -1.2, 0.1].map((x) => (
             <group key={x} position={[x + 1.2, 0, 2.6]}>

@@ -9,7 +9,8 @@ import { STATION_IDS, isStationId, type StationId } from "@/domain/model/demoDat
 import { AGGREGATE_METRICS, STATION_METRICS, formatMetricValue, type AggregateMetricKey, type StationMetricKey } from "@/domain/model/metrics";
 import { fmtClock, fmtDateTime } from "@/lib/format";
 import type { StationView } from "@/lib/views";
-import type { PoiDto, TourDto } from "@/server/services/tourService";
+import type { PoiCaseDto, PoiDto, TourDto } from "@/server/services/tourService";
+import { PoiCaseCard } from "./PoiCaseCard";
 import type { ReplayDto, RunDetailDto } from "@/server/services/simulationService";
 import { StationPanel } from "@/components/process/StationPanel";
 import { useSelection } from "@/store/selection";
@@ -53,11 +54,16 @@ export function FactoryTour({
   pois,
   tours,
   run,
+  cases = [],
+  initialTourId = null,
 }: {
   stations: StationView[];
   pois: PoiDto[];
   tours: TourDto[];
   run: RunDetailDto | null;
+  cases?: PoiCaseDto[];
+  /** Маршрут из параметра URL `tour` (по умолчанию — первый). */
+  initialTourId?: string | null;
 }) {
   const mode = useScene((s) => s.mode);
   const setMode = useScene((s) => s.setMode);
@@ -66,7 +72,10 @@ export function FactoryTour({
   const setQuality = useScene((s) => s.setQuality);
   const effectiveQuality = useScene((s) => s.effectiveQuality);
   const frameIndex = useScene((s) => s.replayFrame);
-  const setFrame = useScene((s) => s.setReplayFrame);
+  const seekReplay = useScene((s) => s.seekReplay);
+  // Перемотка к кадру: время берётся из снимка актуального журнала (ref — без пересоздания функции).
+  const snapshotsRef = useRef<ReplayDto["snapshots"]>([]);
+  const setFrame = useCallback((i: number) => seekReplay(snapshotsRef.current[i]?.t ?? 0, i), [seekReplay]);
   const playing = useScene((s) => s.playing);
   const setPlaying = useScene((s) => s.setPlaying);
   const speed = useScene((s) => s.speed);
@@ -82,6 +91,7 @@ export function FactoryTour({
   const [stopIndex, setStopIndex] = useState(0);
   const [autoplay, setAutoplay] = useState(false);
   const [replay, setReplay] = useState<ReplayDto | null>(null);
+  snapshotsRef.current = replay?.snapshots ?? [];
   const [replayError, setReplayError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -97,7 +107,8 @@ export function FactoryTour({
     } catch { /* Browser may deny fullscreen; the embedded viewport remains usable. */ }
   }
 
-  const tour = tours[0];
+  const [tourId, setTourId] = useState<string | null>(initialTourId);
+  const tour = tours.find((t) => t.id === tourId) ?? tours[0];
   const stops = tour?.stops ?? [];
   const stop = stops[stopIndex];
   const stopPoi = stop ? pois.find((p) => p.id === stop.poiId) : undefined;
@@ -161,18 +172,25 @@ export function FactoryTour({
     return () => controller.abort();
   }, [mode, run, replay, setFrame, setPlaying]);
 
-  // Воспроизведение: шаг кадра = 5 модельных минут; скорость — кадров в секунду.
+  // Воспроизведение: непрерывное модельное время (10 мин/с × скорость); кадр состояния — последний снимок не позже времени.
   useEffect(() => {
     if (!playing || !replay) return;
+    const TICK_MS = 50;
+    const snaps = replay.snapshots;
     const id = window.setInterval(() => {
       const s = useScene.getState();
-      const next = s.replayFrame + 1;
-      if (next >= replay.snapshots.length) {
+      const t = s.replayTime + (10 * speed * TICK_MS) / 1000;
+      const end = snaps[snaps.length - 1]!.t;
+      if (t >= end) {
+        s.seekReplay(end, snaps.length - 1);
         s.setPlaying(false);
         return;
       }
-      s.setReplayFrame(next);
-    }, 1000 / (2 * speed));
+      let f = s.replayFrame;
+      while (f + 1 < snaps.length && snaps[f + 1]!.t <= t) f += 1;
+      while (f > 0 && snaps[f]!.t > t) f -= 1;
+      s.seekReplay(t, f);
+    }, TICK_MS);
     return () => window.clearInterval(id);
   }, [playing, replay, speed]);
 
@@ -182,8 +200,8 @@ export function FactoryTour({
       const cap = s.metrics.capacity?.mean ?? 1;
       const id = s.stationId as StationId;
       if (frame) {
-        const [q, b] = frame.stations[id] ?? [0, 0];
-        return { stationId: id, code: s.code, shortName: s.shortName, capacity: cap, status: s.status, busy: b, queue: q, utilization: b / cap, poiId: s.poiId };
+        const [q, b, d = 0] = frame.stations[id] ?? [0, 0, 0];
+        return { stationId: id, code: s.code, shortName: s.shortName, capacity: cap, status: s.status, busy: b, down: d, queue: q, utilization: b / cap, poiId: s.poiId };
       }
       const u = s.metrics.utilization?.mean ?? null;
       return {
@@ -193,6 +211,7 @@ export function FactoryTour({
         capacity: cap,
         status: s.status,
         busy: u !== null ? Math.round(u * cap) : 0,
+        down: 0,
         queue: s.metrics.avgQueueLength?.mean ?? 0,
         utilization: u,
         poiId: s.poiId,
@@ -214,7 +233,7 @@ export function FactoryTour({
 
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_340px]">
-      <div className="min-w-0 space-y-3">
+      <div className="min-w-0 space-y-3 xl:sticky xl:top-[72px] xl:self-start">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div role="tablist" aria-label="Режим" className="inline-flex rounded-[var(--radius-control)] border border-line-strong bg-surface p-0.5 text-sm">
             {(
@@ -266,7 +285,11 @@ export function FactoryTour({
         >
           {webgl === null ? null : show3D ? (
             <SceneErrorBoundary fallback={planFallback}>
-              <FactoryCanvas stations={sceneStations} onError={() => setSceneFailed(true)} />
+              <FactoryCanvas
+                stations={sceneStations}
+                onError={() => setSceneFailed(true)}
+                replay={mode === "replay" && replay && replay.runId === run?.id ? replay : null}
+              />
             </SceneErrorBoundary>
           ) : (
             planFallback
@@ -346,6 +369,7 @@ export function FactoryTour({
                 <label className="flex items-center gap-1.5 text-sm text-muted">
                   Скорость
                   <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} className="rounded-[var(--radius-control)] border border-line-strong bg-field px-2 py-1 text-ink">
+                    <option value={0.5}>5 мин/с</option>
                     <option value={1}>10 мин/с</option>
                     <option value={3}>30 мин/с</option>
                     <option value={6}>1 ч/с</option>
@@ -353,7 +377,8 @@ export function FactoryTour({
                 </label>
                 <p className="w-full text-xs text-faint">
                   Кадры состояния с шагом 5 модельных минут, полученные из журнала событий репликации №1 (seed {run?.baseSeed}, {replay.events.length} событий
-                  {replay.truncated ? ", журнал усечён" : ""}). Очереди и занятость оборудования в сцене соответствуют выбранному кадру.
+                  {replay.truncated ? ", журнал усечён" : ""}). Очереди, занятость и ремонты в сцене соответствуют кадру; движущиеся насосы показывают переходы изделий между участками по журналу событий
+                  (транспорт в модели мгновенный, движение иллюстративно; красные — списанные изделия).
                 </p>
               </div>
             )}
@@ -365,8 +390,33 @@ export function FactoryTour({
         {tour && (
           <section className="rounded-[var(--radius-panel)] border border-line bg-surface" aria-labelledby="tour-title">
             <header className="border-b border-line px-4 py-3">
+              {tours.length > 1 && (
+                <label className="mb-2 block text-xs text-muted">
+                  Маршрут для аудитории
+                  <select
+                    value={tour.id}
+                    data-testid="tour-select"
+                    onChange={(e) => {
+                      setTourId(e.target.value);
+                      setAutoplay(false);
+                      setStopIndex(0);
+                      const url = new URL(window.location.href);
+                      url.searchParams.set("tour", e.target.value);
+                      window.history.replaceState(null, "", url.toString());
+                    }}
+                    className="mt-1 w-full rounded-[var(--radius-control)] border border-line-strong bg-surface px-2.5 py-1.5 text-sm text-ink"
+                  >
+                    {tours.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.audience}: {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <h2 id="tour-title" className="font-semibold">{tour.name}</h2>
               <p className="text-xs text-muted">{tour.audience}</p>
+              <p className="mt-1 text-xs text-faint">{tour.description}</p>
             </header>
             <div className="p-4">
               <ol className="flex flex-wrap gap-1.5" aria-label="Остановки маршрута">
@@ -432,8 +482,8 @@ export function FactoryTour({
                     const def = AGGREGATE_METRICS[k as AggregateMetricKey];
                     if (!def) return null;
                     return (
-                      <div key={k}>
-                        <dt className="text-xs text-muted">{def.label}</dt>
+                      <div key={k} className="min-w-0">
+                        <dt className="hyphens-auto text-xs text-muted [overflow-wrap:anywhere]">{def.label}</dt>
                         <dd className="font-semibold tabular-nums">
                           {formatMetricValue(def, run.aggregate[k as AggregateMetricKey]?.mean)} {def.unit}
                         </dd>
@@ -448,8 +498,8 @@ export function FactoryTour({
                     const def = STATION_METRICS[k as StationMetricKey];
                     if (!def) return null;
                     return (
-                      <div key={k}>
-                        <dt className="text-xs text-muted">{def.label}</dt>
+                      <div key={k} className="min-w-0">
+                        <dt className="hyphens-auto text-xs text-muted [overflow-wrap:anywhere]">{def.label}</dt>
                         <dd className="font-semibold tabular-nums">
                           {formatMetricValue(def, selectedStationView.metrics[k as StationMetricKey]?.mean)} {def.unit}
                         </dd>
@@ -458,6 +508,11 @@ export function FactoryTour({
                   })}
                 </dl>
               )}
+              {cases
+                .filter((c) => c.poiId === selectedPoi.id)
+                .map((c) => (
+                  <PoiCaseCard key={c.poiId + c.runId} c={c} stationId={selectedPoi.stationId} />
+                ))}
             </div>
           ) : (
             <p className="text-sm text-muted">Нажмите на участок или его табличку в сцене, чтобы открыть точку интереса.</p>

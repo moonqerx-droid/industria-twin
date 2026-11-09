@@ -102,3 +102,15 @@ button:disabled { cursor: not-allowed; }
 /* Полоса KPI: единый приборный блок с разделителями */
 .kpi-strip { gap: 1px; background: var(--color-line); border: 1px solid var(--color-line); border-radius: var(--radius-panel); overflow: hidden; box-shadow: 0 1px 3px #0e1c2b0a; }
 .kpi-strip .kpi-card { border: 0; border-radius: 0; }
+
+/* Печать отчётов (сравнение, дашборд): только содержимое, без навигации и элементов управления */
+@media print {
+  @page { size: A4; margin: 12mm; }
+  html, body { background: #fff !important; }
+  .app-sidebar, header.sticky, nav, .no-print, button, select, [data-nextjs-toast] { display: none !important; }
+  .min-h-dvh { display: block !important; }
+  .app-main { padding: 0 !important; }
+  .panel-surface { box-shadow: none !important; break-inside: avoid; }
+  .xl\:grid-cols-\[300px_1fr\] { grid-template-columns: 1fr !important; }
+  a { color: inherit !important; text-decoration: none !important; }
+}

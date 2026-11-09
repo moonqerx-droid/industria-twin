@@ -9,14 +9,19 @@ import { getCurrentUser } from "@/server/auth/session";
 import type { RoleId } from "@/server/auth/token";
 import { prisma } from "@/server/db";
 import { RunAdminTable } from "./RunAdminTable";
+import { UserAdmin } from "./UserAdmin";
+import { AuditLogPanel } from "./AuditLogPanel";
+import { listUsers } from "@/server/services/userService";
+import { AUDIT_RETENTION_DAYS, listAudit } from "@/server/services/auditService";
 
 export const metadata: Metadata = { title: "Администрирование" };
 
 export default async function AdminPage() {
   const user = await getCurrentUser();
   if (!user || user.role !== "admin") redirect("/dashboard");
-  const [users, runs, counts] = await Promise.all([
-    prisma.user.findMany({ select: { id: true, login: true, displayName: true, roleId: true, isActive: true, lastLoginAt: true }, orderBy: { login: "asc" } }),
+  const [users, audit, runs, counts] = await Promise.all([
+    listUsers(),
+    listAudit({ limit: 100 }),
     prisma.simulationRun.findMany({ select: { id: true, scenarioName: true, createdAt: true, replications: true, durationMs: true }, orderBy: { createdAt: "desc" }, take: 50 }),
     Promise.all([prisma.scenario.count(), prisma.simulationRun.count(), prisma.session.count()]),
   ]);
@@ -25,28 +30,8 @@ export default async function AdminPage() {
     <>
       <PageHeader title="Администрирование" description="Пользователи, права ролей, прогоны и параметры системы." />
       <div className="grid gap-5 lg:grid-cols-2">
-        <Panel title="Пользователи">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-line text-left text-xs text-muted">
-                <th className="py-2 font-normal">Логин</th>
-                <th className="py-2 font-normal">Псевдоним</th>
-                <th className="py-2 font-normal">Роль</th>
-                <th className="py-2 font-normal">Последний вход</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((u) => (
-                <tr key={u.id} className="border-b border-line/70 last:border-0">
-                  <td className="py-2">{u.login}</td>
-                  <td className="py-2 text-muted">{u.displayName}</td>
-                  <td className="py-2">{ROLE_LABELS[u.roleId as RoleId]}</td>
-                  <td className="py-2 text-muted">{u.lastLoginAt ? fmtDateTime(u.lastLoginAt.toISOString()) : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="mt-3 text-xs text-faint">Хранятся только логин, псевдоним и хеш пароля. Активных сессий: {counts[2]}.</p>
+        <Panel title="Пользователи" subtitle={`Учётных записей: ${users.length}, активных сессий: ${counts[2]}`} className="lg:col-span-2">
+          <UserAdmin users={users} currentUserId={user.id} />
         </Panel>
         <Panel title="Права ролей">
           <table className="w-full text-sm">
@@ -73,6 +58,9 @@ export default async function AdminPage() {
               ))}
             </tbody>
           </table>
+        </Panel>
+        <Panel title="Журнал аудита" subtitle={`Последние действия; хранение ${AUDIT_RETENTION_DAYS} дней, только логины-псевдонимы`}>
+          <AuditLogPanel initial={audit} />
         </Panel>
         <Panel title="Прогоны моделирования" subtitle={`Всего: ${counts[1]}, сценариев: ${counts[0]}`} className="lg:col-span-2">
           <RunAdminTable runs={runs.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() }))} />

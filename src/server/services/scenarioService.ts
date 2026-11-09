@@ -86,6 +86,7 @@ export function scenarioToParameters(s: ScenarioWithParams): ScenarioParameters 
       processTime: rowToDistribution(row),
       hourlyCostRub: row.hourlyCostRub,
       consumablesPerOperationRub: row.consumablesPerOperationRub,
+      failure: row.mtbfMin != null && row.mttrMin != null ? { mtbfMin: row.mtbfMin, mttrMin: row.mttrMin } : null,
     };
   }
   return {
@@ -128,6 +129,8 @@ function stationRows(p: ScenarioParameters): Prisma.ScenarioStationParameterCrea
       capacity: sp.capacity,
       hourlyCostRub: sp.hourlyCostRub,
       consumablesPerOperationRub: sp.consumablesPerOperationRub,
+      mtbfMin: sp.failure?.mtbfMin ?? null,
+      mttrMin: sp.failure?.mttrMin ?? null,
       ...distributionToColumns(sp.processTime),
     };
   });

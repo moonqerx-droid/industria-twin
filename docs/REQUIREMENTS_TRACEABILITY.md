@@ -59,6 +59,27 @@
 | NFR-13 Доступность | Видимый фокус, ARIA (`role`, `aria-pressed`, `aria-current`), клавиатура для узлов схемы и строк таблицы | Ручн. |
 | NFR-15 Единые ошибки API | `server/http.ts` → `errorResponse` | Авто: статусы 400/401/403/404/409/429 в `api.test.ts` |
 
+## D2. Требования второй итерации (FR-35 … FR-42)
+
+| Требование | Реализация | Проверка |
+|---|---|---|
+| FR-35 Общие случайные числа | `src/domain/simulation/engine.ts` (`streamSeed`, потоки ARRIVAL/SERVICE/QUALITY/FAILURE/REPAIR) | Авто: `crn.test.ts` — одинаковые поступления, длительности операций и исходы контроля при изменении мощности |
+| FR-36 Парное сравнение | `statistics.ts` (`pairedDifference`), `comparison.ts`, `comparisonService.canPairRuns` | Авто: `crn.test.ts` «парная оценка уже интервала Уэлча»; `api.test.ts` «демонстрационные прогоны… сравниваются парно» |
+| FR-37 Отказы оборудования | `engine.ts`, `bottleneck.ts` (`effectiveLoad`), `ScenarioStudio`, `prisma/migrations/20261109160000_equipment_failures` | Авто: `failures.test.ts` (доступность ≈ MTBF/(MTBF+MTTR), занятые + в ремонте ≤ вместимость, валидация); `api.test.ts` «сохраняет параметры отказов» |
+| FR-38 Советник по ресурсам | `src/domain/analysis/advisor.ts`, `GET /api/runs/[id]/advice`, `ResourceAdvisor` | Авто: `advisor.test.ts`; `api.test.ts` «советник по ресурсам…»; e2e «советник: рекомендация → сценарий → парное сравнение» |
+| FR-39 Вывод для руководителя | `CompareView` → `ExecutiveVerdict` | Авто: e2e (блок `executive-verdict`) |
+| FR-40 Кейсы точек интереса | `POI_CASES` (`demoData.ts`), `tourService.listPoiCases`, `PoiCaseCard` | Авто: `api.test.ts` (кейсы рассчитаны, парные); e2e «кейс точки интереса… ведёт к сравнению» |
+| FR-41 Отказы в 3D | `models.tsx` (`RepairMarker`, `BROKEN_COLOR`), `StationAnchor` | Ручн.: воспроизведение базового прогона, кадр ~04:05 |
+| FR-43 Кривая пропускной способности | `src/domain/analysis/capacity.ts`, `GET /api/runs/[id]/capacity`, `CapacityCurvePanel` | Авто: `capacity.test.ts` (монотонность, согласованность предела с ρ); e2e «кривая пропускной способности…» |
+| FR-44 Маршруты для аудиторий | `TOURS` (4 маршрута), `tourService.listTours`, `FactoryTour` (выбор, `?tour=`) | Авто: e2e «маршруты для разных аудиторий…» |
+| FR-45 Движение изделий | `src/components/factory3d/ReplayFlow.tsx`, `sceneStore.replayTime` | Авто: `replayFlow.test.ts`; Ручн.: Р-10 |
+| FR-46 Лимит неуспешных входов | `rateLimit.ts`, `api/auth/login/route.ts` | Авто: `api.test.ts` «успешные входы не расходуют лимит…» |
+| FR-47 Импорт/экспорт сценария | `src/domain/model/scenarioExchange.ts`, `ScenarioExchange` | Авто: `scenarioExchange.test.ts` (круговая проверка CSV, ошибки с номером строки, JSON); e2e «импорт CSV участков…» |
+| FR-48 Управление пользователями | `userService`, `/api/admin/users`, `/api/admin/users/[id]`, `UserAdmin` | Авто: `api.test.ts` «администратор создаёт пользователя…», «блокировка и смена пароля отзывают сессии», «не может заблокировать… себя»; e2e «администратор создаёт пользователя…» |
+| FR-49 Журнал аудита | `AuditLog` (миграция `audit_log`), `auditService`, `/api/admin/audit`, `AuditLogPanel` | Авто: `api.test.ts` «журнал аудита фиксирует действия…» |
+| FR-50 Обезличивание при удалении | `userService.deleteUser` | Авто: `api.test.ts` «удаление пользователя обезличивает…» |
+| FR-42 Экспорт и печать | `CompareView` (`exportCsv`), `PrintButton`, `globals.css @media print` | Авто: e2e (скачивание CSV); Ручн.: предпросмотр печати |
+
 ## E. Инварианты симулятора (раздел 15 задания)
 
 | Инвариант | Тест (`tests/unit/engine.test.ts`) |
@@ -68,3 +89,5 @@
 | Длительности неотрицательны | `checkInvariants`; `analysis.test.ts` «выборки неотрицательны» |
 | Ресурс не обслуживает больше заданий, чем вместимость | «ресурс никогда не обслуживает больше заданий…» (по журналу событий) |
 | События в допустимом временном порядке | `checkInvariants`; `api.test.ts` «журнал воспроизведения содержит упорядоченные события» |
+| Занятые + в ремонте ≤ вместимость; отказы и ремонты сбалансированы | `failures.test.ts` |
+| CRN: изменение мощности не меняет поток поступлений и «судьбу» изделий | `crn.test.ts` |

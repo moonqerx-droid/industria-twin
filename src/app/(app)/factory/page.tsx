@@ -10,8 +10,8 @@ import { getTourState } from "@/server/services/tourService";
 
 export const metadata: Metadata = { title: "3D-тур по цеху" };
 
-export default async function FactoryPage({ searchParams }: { searchParams: Promise<{ run?: string }> }) {
-  const { run: runParam } = await searchParams;
+export default async function FactoryPage({ searchParams }: { searchParams: Promise<{ run?: string; tour?: string }> }) {
+  const { run: runParam, tour: tourParam } = await searchParams;
   const [model, state, runs] = await Promise.all([
     getProductionModel(),
     getTourState(runParam ?? null).catch(() => getTourState(null)),
@@ -25,7 +25,7 @@ export default async function FactoryPage({ searchParams }: { searchParams: Prom
         description="Экскурсия по участкам и воспроизведение рассчитанного прогона. Каждый объект сцены связан с тем же участком, что мнемосхема и аналитика."
         actions={state.run ? <RunPicker runs={runs} currentId={state.run.id} /> : null}
       />
-      <FactoryTour key={state.run?.id ?? "none"} stations={stations} pois={state.pois} tours={state.tours} run={state.run} />
+      <FactoryTour key={state.run?.id ?? "none"} stations={stations} pois={state.pois} tours={state.tours} run={state.run} cases={state.cases} initialTourId={tourParam ?? null} />
       <div className="mt-6">
         <SyntheticNote />
       </div>

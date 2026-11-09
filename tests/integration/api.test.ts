@@ -11,14 +11,17 @@ import * as runRoute from "@/app/api/scenarios/[id]/run/route";
 import * as runsRoute from "@/app/api/runs/route";
 import * as runDetailRoute from "@/app/api/runs/[id]/route";
 import * as replayRoute from "@/app/api/runs/[id]/replay/route";
+import * as adviceRoute from "@/app/api/runs/[id]/advice/route";
 import * as compareRoute from "@/app/api/compare/route";
 import * as poisRoute from "@/app/api/pois/route";
 import * as tourRoute from "@/app/api/tour/route";
 import * as stationMetricsRoute from "@/app/api/stations/[id]/metrics/route";
 import * as usersRoute from "@/app/api/admin/users/route";
+import * as userRoute from "@/app/api/admin/users/[id]/route";
+import * as auditRoute from "@/app/api/admin/audit/route";
 import { BASELINE_PARAMETERS, STATION_IDS } from "@/domain/model/demoData";
 import { demoAccounts } from "@/server/services/seedService";
-import { loginLimiter, simulationLimiter } from "@/server/rateLimit";
+import { adviceLimiter, loginLimiter, simulationLimiter } from "@/server/rateLimit";
 
 const BASE = "http://localhost:3000";
 const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
@@ -94,6 +97,19 @@ describe("Аутентификация", () => {
       last = res.status;
     }
     expect(last).toBe(429);
+    loginLimiter.reset();
+  });
+
+  it("успешные входы не расходуют лимит, успешный вход сбрасывает счётчик неудач", async () => {
+    loginLimiter.reset();
+    const acc = demoAccounts().find((a) => a.role === "viewer")!;
+    const ok = () => loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: acc.login, password: acc.password } }));
+    const bad = () => loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: acc.login, password: "wrong" } }));
+    for (let i = 0; i < 15; i += 1) expect((await ok()).status).toBe(200);
+    for (let i = 0; i < 9; i += 1) expect((await bad()).status).toBe(401);
+    expect((await ok()).status).toBe(200);
+    for (let i = 0; i < 9; i += 1) expect((await bad()).status).toBe(401);
+    expect((await ok()).status).toBe(200);
     loginLimiter.reset();
   });
 });
@@ -254,6 +270,56 @@ describe("Сценарии и моделирование", () => {
     expect(body.method).toContain("Уэлча");
   });
 
+  it("демонстрационные прогоны с одинаковым seed сравниваются парно (CRN), кейсы тура рассчитаны", async () => {
+    const tour = await (await tourRoute.GET(request("/api/tour", { cookie: viewer }))).json();
+    expect(tour.cases.length).toBeGreaterThanOrEqual(4);
+    for (const c of tour.cases) {
+      expect(c.paired).toBe(true);
+      expect(c.items.length).toBeGreaterThan(0);
+    }
+    const c = tour.cases.find((x: { poiId: string }) => x.poiId === "poi-machining");
+    const res = await compareRoute.GET(request(`/api/compare?baseline=${c.baselineRunId}&runs=${c.runId}`, { cookie: viewer }));
+    const body = await res.json();
+    expect(body.pairedFlags).toEqual([true]);
+    expect(body.method).toContain("парное");
+    const cycle = body.alternatives[0].aggregate.find((m: { key: string }) => m.key === "cycleTimeAvgMin");
+    expect(cycle.method).toBe("paired");
+    expect(body.alternatives[0].parameterChanges.some((x: { path: string }) => x.path === "stations.st-machining.failure")).toBe(true);
+  });
+
+  it("советник по ресурсам доступен наблюдателю и ранжирует варианты", async () => {
+    adviceLimiter.reset();
+    const tour = await (await tourRoute.GET(request("/api/tour", { cookie: viewer }))).json();
+    const res = await adviceRoute.GET(request(`/api/runs/${tour.run.id}/advice`, { cookie: viewer }), ctx(tour.run.id));
+    expect(res.status).toBe(200);
+    const { advice } = await res.json();
+    expect(advice.candidates.length).toBe(7);
+    expect(advice.paired).toBe(true);
+    expect(advice.best).not.toBeNull();
+    expect((await adviceRoute.GET(request("/api/runs/unknown/advice", { cookie: viewer }), ctx("unknown"))).status).toBe(404);
+    expect((await adviceRoute.GET(request(`/api/runs/${tour.run.id}/advice`), ctx(tour.run.id))).status).toBe(401);
+  });
+
+  it("сохраняет параметры отказов оборудования и проверяет их", async () => {
+    const params = {
+      ...BASELINE_PARAMETERS,
+      replications: 3,
+      stations: { ...BASELINE_PARAMETERS.stations, "st-assembly": { ...BASELINE_PARAMETERS.stations["st-assembly"], failure: { mtbfMin: 480, mttrMin: 25 } } },
+    };
+    const res = await scenariosRoute.POST(request("/api/scenarios", { method: "POST", cookie: engineer, body: { name: "Отказы сборки", parameters: params } }));
+    expect(res.status).toBe(201);
+    const { scenario } = await res.json();
+    expect(scenario.parameters.stations["st-assembly"].failure).toEqual({ mtbfMin: 480, mttrMin: 25 });
+    expect(scenario.parameters.stations["st-packing"].failure).toBeNull();
+    const run = await (await runRoute.POST(request(`/api/scenarios/${scenario.id}/run`, { method: "POST", cookie: engineer }), ctx(scenario.id))).json();
+    const st = run.run.stations.find((s: { stationId: string }) => s.stationId === "st-assembly");
+    expect(st.metrics.failures.mean).toBeGreaterThan(0);
+    expect(st.metrics.availability.mean).toBeLessThan(1);
+    const bad = { ...params, stations: { ...params.stations, "st-assembly": { ...params.stations["st-assembly"], failure: { mtbfMin: 480, mttrMin: 0 } } } };
+    expect((await scenariosRoute.POST(request("/api/scenarios", { method: "POST", cookie: engineer, body: { name: "Неверные отказы", parameters: bad } }))).status).toBe(400);
+    await scenarioRoute.DELETE(request(`/api/scenarios/${scenario.id}`, { method: "DELETE", cookie: engineer }), ctx(scenario.id));
+  });
+
   it("сравнение с неизвестным прогоном → 404, без параметров → 400", async () => {
     const tour = await (await tourRoute.GET(request("/api/tour", { cookie: viewer }))).json();
     const res = await compareRoute.GET(request(`/api/compare?baseline=${tour.run.id}&runs=missing`, { cookie: viewer }));
@@ -297,5 +363,72 @@ describe("Сценарии и моделирование", () => {
     const body = await (await usersRoute.GET(request("/api/admin/users", { cookie: admin }))).json();
     expect(body.users.length).toBe(3);
     expect(JSON.stringify(body)).not.toContain("passwordHash");
+  });
+});
+
+describe("Управление пользователями и журнал аудита", () => {
+  const pwd = "Strong#Pass2026";
+  let newId = "";
+  const loginAs = (login: string, password: string) =>
+    loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login, password } }));
+
+  it("администратор создаёт пользователя; проверяются права, уникальность и политика пароля", async () => {
+    loginLimiter.reset();
+    const body = { login: "tester.one", displayName: "Тестировщик", role: "engineer", password: pwd };
+    expect((await usersRoute.POST(request("/api/admin/users", { method: "POST", cookie: engineer, body }))).status).toBe(403);
+    expect((await usersRoute.POST(request("/api/admin/users", { method: "POST", cookie: admin, body: { ...body, password: "short1" } }))).status).toBe(400);
+    expect((await usersRoute.POST(request("/api/admin/users", { method: "POST", cookie: admin, body: { ...body, password: "onlyletterslong" } }))).status).toBe(400);
+    const res = await usersRoute.POST(request("/api/admin/users", { method: "POST", cookie: admin, body }));
+    expect(res.status).toBe(201);
+    newId = (await res.json()).user.id;
+    expect((await usersRoute.POST(request("/api/admin/users", { method: "POST", cookie: admin, body }))).status).toBe(409);
+    expect((await loginAs("tester.one", pwd)).status).toBe(200);
+  });
+
+  it("блокировка и смена пароля отзывают сессии", async () => {
+    const res = await loginAs("tester.one", pwd);
+    const cookie = res.headers.get("set-cookie")!.split(";")[0]!;
+    expect((await meRoute.GET(request("/api/auth/me", { cookie }))).status).toBe(200);
+    const block = await userRoute.PATCH(request(`/api/admin/users/${newId}`, { method: "PATCH", cookie: admin, body: { isActive: false } }), ctx(newId));
+    expect(block.status).toBe(200);
+    expect((await meRoute.GET(request("/api/auth/me", { cookie }))).status).toBe(401);
+    expect((await loginAs("tester.one", pwd)).status).toBe(401);
+    await userRoute.PATCH(request(`/api/admin/users/${newId}`, { method: "PATCH", cookie: admin, body: { isActive: true } }), ctx(newId));
+    const cookie2 = (await loginAs("tester.one", pwd)).headers.get("set-cookie")!.split(";")[0]!;
+    await userRoute.PATCH(request(`/api/admin/users/${newId}`, { method: "PATCH", cookie: admin, body: { password: "Another#Pass2027" } }), ctx(newId));
+    expect((await meRoute.GET(request("/api/auth/me", { cookie: cookie2 }))).status).toBe(401);
+    expect((await loginAs("tester.one", "Another#Pass2027")).status).toBe(200);
+    loginLimiter.reset();
+  });
+
+  it("администратор не может заблокировать, понизить или удалить себя", async () => {
+    const list = await (await usersRoute.GET(request("/api/admin/users", { cookie: admin }))).json();
+    const id = list.users.find((u: { login: string }) => u.login === "admin").id as string;
+    for (const body of [{ isActive: false }, { role: "viewer" }]) {
+      const res = await userRoute.PATCH(request(`/api/admin/users/${id}`, { method: "PATCH", cookie: admin, body }), ctx(id));
+      expect(res.status).toBe(409);
+    }
+    expect((await userRoute.DELETE(request(`/api/admin/users/${id}`, { method: "DELETE", cookie: admin }), ctx(id))).status).toBe(409);
+  });
+
+  it("журнал аудита фиксирует действия и доступен только администратору", async () => {
+    expect((await auditRoute.GET(request("/api/admin/audit", { cookie: viewer }))).status).toBe(403);
+    const all = await (await auditRoute.GET(request("/api/admin/audit?limit=500", { cookie: admin }))).json();
+    const actions = new Set(all.entries.map((e: { action: string }) => e.action));
+    for (const a of ["login.success", "login.failure", "scenario.create", "simulation.run", "user.create", "user.update", "user.password"]) expect(actions).toContain(a);
+    expect(JSON.stringify(all)).not.toContain(pwd);
+    const runs = await (await auditRoute.GET(request("/api/admin/audit?action=simulation", { cookie: admin }))).json();
+    expect(runs.entries.every((e: { action: string }) => e.action.startsWith("simulation"))).toBe(true);
+  });
+
+  it("удаление пользователя обезличивает его записи аудита", async () => {
+    const res = await userRoute.DELETE(request(`/api/admin/users/${newId}`, { method: "DELETE", cookie: admin }), ctx(newId));
+    expect(res.status).toBe(200);
+    const all = await (await auditRoute.GET(request("/api/admin/audit?limit=500", { cookie: admin }))).json();
+    const text = JSON.stringify(all.entries.filter((e: { action: string }) => e.action !== "login.failure"));
+    expect(text).not.toContain("tester.one");
+    expect(text).toContain("удалённый пользователь");
+    expect((await loginAs("tester.one", "Another#Pass2027")).status).toBe(401);
+    loginLimiter.reset();
   });
 });

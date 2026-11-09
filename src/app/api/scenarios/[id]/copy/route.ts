@@ -1,3 +1,4 @@
+import { audit } from "@/server/services/auditService";
 import { requireUser } from "@/server/auth/session";
 import { handler, json } from "@/server/http";
 import { copyScenario } from "@/server/services/scenarioService";
@@ -10,5 +11,7 @@ export const POST = handler(async (req: Request, ctx: Ctx) => {
   const id = idSchema.parse((await ctx.params).id);
   const text = await req.text();
   const body = scenarioCopySchema.parse(text ? JSON.parse(text) : {});
-  return json({ scenario: await copyScenario(id, user.id, body.name) }, { status: 201 });
+  const scenario = await copyScenario(id, user.id, body.name);
+  await audit(user, "scenario.copy", { entityType: "scenario", entityId: scenario.id, details: `${scenario.name} ← ${id}` });
+  return json({ scenario }, { status: 201 });
 });

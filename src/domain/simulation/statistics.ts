@@ -59,3 +59,28 @@ export function differenceOfMeans(before: SummaryStats, after: SummaryStats): Di
   const half = tQuantile975(df) * se;
   return { diff, ci95: half, distinguishable: Math.abs(diff) > half };
 }
+
+/**
+ * Парная разность (after_i − before_i) по репликациям с общими случайными числами.
+ * Репликации с одинаковым номером используют одинаковые потоки случайных чисел, поэтому
+ * разность считается внутри пары: дисперсия шума общей части сокращается.
+ * Возвращает null, если пар меньше двух.
+ */
+export function pairedDifference(
+  before: Array<number | null>,
+  after: Array<number | null>,
+): (DifferenceStats & { n: number }) | null {
+  const diffs: number[] = [];
+  const len = Math.min(before.length, after.length);
+  for (let i = 0; i < len; i += 1) {
+    const b = before[i];
+    const a = after[i];
+    if (b === null || b === undefined || a === null || a === undefined) continue;
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    diffs.push(a - b);
+  }
+  const s = summarize(diffs);
+  if (s.n < 2 || s.mean === null || s.ci95 === null) return null;
+  if (s.ci95 === 0) return { n: s.n, diff: s.mean, ci95: 0, distinguishable: s.mean !== 0 };
+  return { n: s.n, diff: s.mean, ci95: s.ci95, distinguishable: Math.abs(s.mean) > s.ci95 };
+}

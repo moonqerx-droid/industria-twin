@@ -1,12 +1,15 @@
 import { requireUser } from "@/server/auth/session";
-import { prisma } from "@/server/db";
-import { handler, json } from "@/server/http";
+import { handler, json, parseJson } from "@/server/http";
+import { createUser, listUsers } from "@/server/services/userService";
+import { userCreateSchema } from "@/server/validation/schemas";
 
 export const GET = handler(async (req: Request) => {
   await requireUser(req, "users:read");
-  const users = await prisma.user.findMany({
-    select: { id: true, login: true, displayName: true, roleId: true, isActive: true, createdAt: true, lastLoginAt: true },
-    orderBy: { login: "asc" },
-  });
-  return json({ users });
+  return json({ users: await listUsers() });
+});
+
+export const POST = handler(async (req: Request) => {
+  const user = await requireUser(req, "users:write");
+  const input = await parseJson(req, userCreateSchema);
+  return json({ user: await createUser(user, input) }, { status: 201 });
 });

@@ -11,7 +11,48 @@ import {
 } from "@/domain/model/metrics";
 import type { SummaryStats } from "@/domain/simulation/statistics";
 import { DISTRIBUTION_LABELS, distributionMean } from "@/domain/simulation/distributions";
-import { getRunDetail, type RunSummaryDto } from "./simulationService";
+import { engineSupportsCrn } from "@/domain/simulation/types";
+import { prisma } from "@/server/db";
+import { getRunDetail, type RunDetailDto, type RunSummaryDto } from "./simulationService";
+
+/** Значения показателей по репликациям: агрегаты и показатели участков, упорядоченные по номеру репликации. */
+interface ReplicationMatrix {
+  aggregate: Record<string, Array<number | null>>;
+  stations: Record<string, Record<string, Array<number | null>>>;
+}
+
+async function loadReplicationMatrix(runId: string): Promise<ReplicationMatrix> {
+  const rows = await prisma.replicationResult.findMany({ where: { runId }, orderBy: { replicationIndex: "asc" } });
+  const aggregate: ReplicationMatrix["aggregate"] = {};
+  const stations: ReplicationMatrix["stations"] = {};
+  rows.forEach((row, i) => {
+    const agg = JSON.parse(row.aggregateJson) as Record<string, number | null>;
+    for (const [k, v] of Object.entries(agg)) (aggregate[k] ??= [])[i] = typeof v === "number" ? v : null;
+    const sts = JSON.parse(row.stationsJson) as Array<Record<string, unknown> & { stationId: string }>;
+    for (const st of sts) {
+      const target = (stations[st.stationId] ??= {});
+      for (const [k, v] of Object.entries(st)) {
+        if (k === "stationId" || k === "name") continue;
+        (target[k] ??= [])[i] = typeof v === "number" ? v : null;
+      }
+    }
+  });
+  return { aggregate, stations };
+}
+
+/**
+ * Парное сравнение допустимо, если оба прогона рассчитаны движком с CRN, с одинаковым базовым seed
+ * и одинаковым числом репликаций: тогда репликация i в обоих прогонах использует одни и те же потоки.
+ */
+export function canPairRuns(a: Pick<RunDetailDto, "engineVersion" | "baseSeed" | "replications">, b: typeof a): boolean {
+  return (
+    engineSupportsCrn(a.engineVersion) &&
+    engineSupportsCrn(b.engineVersion) &&
+    a.baseSeed === b.baseSeed &&
+    a.replications === b.replications &&
+    a.replications >= 2
+  );
+}
 
 export interface ParameterChange {
   path: string;
@@ -41,6 +82,8 @@ export interface ComparisonDto {
   baselineAggregate: Record<AggregateMetricKey, SummaryStats>;
   alternativeAggregates: Array<Record<AggregateMetricKey, SummaryStats>>;
   method: string;
+  /** Для каждой альтернативы: применено ли парное сравнение (CRN). */
+  pairedFlags: boolean[];
 }
 
 const fmt = (v: number, d = 2) => v.toLocaleString("ru-RU", { maximumFractionDigits: d });
@@ -80,6 +123,9 @@ export function diffParameters(a: ScenarioParameters, b: ScenarioParameters): Pa
         before: `${DISTRIBUTION_LABELS[x.processTime.kind]}, ${fmt(distributionMean(x.processTime), 1)} мин`,
         after: `${DISTRIBUTION_LABELS[y.processTime.kind]}, ${fmt(distributionMean(y.processTime), 1)} мин`,
       });
+    const ff = (f: typeof x.failure) => (f ? `MTBF ${fmt(f.mtbfMin, 0)} / MTTR ${fmt(f.mttrMin, 1)} мин` : "без отказов");
+    if (ff(x.failure) !== ff(y.failure))
+      out.push({ path: `stations.${st.id}.failure`, label: `${st.shortName}: отказы`, before: ff(x.failure), after: ff(y.failure) });
     if (x.hourlyCostRub !== y.hourlyCostRub)
       out.push({ path: `stations.${st.id}.hourlyCostRub`, label: `${st.shortName}: ставка, ₽/ч`, before: fmt(x.hourlyCostRub, 0), after: fmt(y.hourlyCostRub, 0) });
     if (x.consumablesPerOperationRub !== y.consumablesPerOperationRub)
@@ -95,13 +141,24 @@ export function diffParameters(a: ScenarioParameters, b: ScenarioParameters): Pa
 
 export async function compareRuns(baselineRunId: string, alternativeRunIds: string[]): Promise<ComparisonDto> {
   const base = await getRunDetail(baselineRunId);
+  const baseMatrix = await loadReplicationMatrix(baselineRunId);
+  const pairedFlags: boolean[] = [];
   const alternatives: AlternativeComparison[] = [];
   const alternativeAggregates: Array<Record<AggregateMetricKey, SummaryStats>> = [];
   for (const id of alternativeRunIds) {
     const alt = await getRunDetail(id);
     alternativeAggregates.push(alt.aggregate);
+    const paired = canPairRuns(base, alt);
+    pairedFlags.push(paired);
+    const altMatrix = paired ? await loadReplicationMatrix(id) : null;
     const aggregate = KEY_AGGREGATE_METRICS.map((key) =>
-      compareMetric(key, AGGREGATE_METRICS[key].direction, base.aggregate[key], alt.aggregate[key]),
+      compareMetric(
+        key,
+        AGGREGATE_METRICS[key].direction,
+        base.aggregate[key],
+        alt.aggregate[key],
+        altMatrix ? { before: baseMatrix.aggregate[key] ?? [], after: altMatrix.aggregate[key] ?? [] } : undefined,
+      ),
     );
     const stations: StationComparison[] = base.stations.map((bs) => {
       const as = alt.stations.find((s) => s.stationId === bs.stationId)!;
@@ -109,7 +166,15 @@ export async function compareRuns(baselineRunId: string, alternativeRunIds: stri
         stationId: bs.stationId,
         name: bs.name,
         metrics: (["capacity", ...KEY_STATION_METRICS] as StationMetricKey[]).map((key) =>
-          compareMetric(key, STATION_METRICS[key].direction, bs.metrics[key], as.metrics[key]),
+          compareMetric(
+            key,
+            STATION_METRICS[key].direction,
+            bs.metrics[key],
+            as.metrics[key],
+            altMatrix
+              ? { before: baseMatrix.stations[bs.stationId]?.[key] ?? [], after: altMatrix.stations[bs.stationId]?.[key] ?? [] }
+              : undefined,
+          ),
         ),
       };
     });
@@ -143,9 +208,13 @@ export async function compareRuns(baselineRunId: string, alternativeRunIds: stri
     alternatives,
     baselineAggregate,
     alternativeAggregates,
+    pairedFlags,
     method:
-      "Сравниваются средние значения показателей по репликациям каждого прогона. Разность считается статистически " +
-      "различимой, если 95% доверительный интервал разности средних (приближение Уэлча) не содержит ноль. " +
+      "Сравниваются средние значения показателей по репликациям. Движок использует общие случайные числа (CRN): " +
+      "при одинаковом seed изделие №k получает одинаковые длительности операций и исходы контроля в обоих сценариях. " +
+      "Поэтому для прогонов с одинаковым seed и числом репликаций применяется парное сравнение: 95% доверительный " +
+      "интервал строится по разностям внутри пар репликаций. Если прогоны несопоставимы (разный seed или старая версия " +
+      "движка), используется интервал Уэлча для независимых выборок. Разность считается различимой, если интервал не содержит ноль. " +
       "Вывод относится только к модели с заданными синтетическими параметрами и не доказывает причинно-следственную " +
       "связь на реальном производстве.",
   };

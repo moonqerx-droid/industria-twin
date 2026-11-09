@@ -232,6 +232,7 @@ export async function getRunDetail(id: string): Promise<RunDetailDto> {
         avgQueueLength: v("avgQueueLength"),
         avgWaitMin: v("avgWaitMin"),
         queueAtEnd: v("queueAtEnd"),
+        downtimeShare: 1 - (metrics.availability?.mean ?? 1),
       }),
     };
   });
@@ -245,6 +246,7 @@ export async function getRunDetail(id: string): Promise<RunDetailDto> {
       avgQueueLength: s.metrics.avgQueueLength?.mean ?? 0,
       avgWaitMin: s.metrics.avgWaitMin?.mean ?? 0,
       queueAtEnd: s.metrics.queueAtEnd?.mean ?? 0,
+      downtimeShare: 1 - (s.metrics.availability?.mean ?? 1),
     })),
   );
 

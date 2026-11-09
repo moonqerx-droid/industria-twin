@@ -26,6 +26,13 @@ export const stationParametersSchema = z.object({
   processTime: durationSchema,
   hourlyCostRub: z.number().finite().min(0).max(1_000_000),
   consumablesPerOperationRub: z.number().finite().min(0).max(10_000_000),
+  failure: z
+    .object({
+      mtbfMin: z.number().finite().min(10, "MTBF не менее 10 мин").max(1_000_000),
+      mttrMin: z.number().finite().min(0.5, "MTTR не менее 0,5 мин").max(ENGINE_LIMITS.maxHorizonMin),
+    })
+    .nullable()
+    .optional(),
 });
 
 const stationsShape = Object.fromEntries(STATION_IDS.map((id) => [id, stationParametersSchema])) as Record<
@@ -88,6 +95,36 @@ export const compareQuerySchema = z.object({
     .string()
     .transform((s) => s.split(",").map((x) => x.trim()).filter(Boolean))
     .pipe(z.array(idSchema).min(1, "Выберите хотя бы один альтернативный прогон").max(3, "Не более трёх альтернатив")),
+});
+
+/** Пароль: не короче 10 символов, буквы и цифры. */
+const passwordSchema = z
+  .string()
+  .min(10, "Пароль не короче 10 символов")
+  .max(128)
+  .refine((v) => /\p{L}/u.test(v) && /\d/.test(v), "Пароль должен содержать буквы и цифры");
+
+const roleSchema = z.enum(["admin", "engineer", "viewer"]);
+
+export const userCreateSchema = z.object({
+  login: z.string().trim().min(3, "Логин не короче 3 символов").max(40).regex(/^[a-z0-9._-]+$/, "Логин: латинские строчные буквы, цифры, точка, дефис, подчёркивание"),
+  displayName: z.string().trim().min(2).max(60),
+  role: roleSchema,
+  password: passwordSchema,
+});
+
+export const userUpdateSchema = z
+  .object({
+    displayName: z.string().trim().min(2).max(60).optional(),
+    role: roleSchema.optional(),
+    isActive: z.boolean().optional(),
+    password: passwordSchema.optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, "Нет изменений");
+
+export const auditQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  action: z.string().trim().max(40).regex(/^[a-z.]*$/).optional(),
 });
 
 export type ScenarioCreateInput = z.infer<typeof scenarioCreateSchema>;

@@ -20,6 +20,8 @@ export interface StationSceneData {
   status: "normal" | "high" | "critical" | null;
   /** Значения для отображения в текущем режиме. */
   busy: number;
+  /** Единиц в ремонте (воспроизведение) или среднее (экскурсия). */
+  down: number;
   queue: number;
   utilization: number | null;
   poiId: string | null;
@@ -93,6 +95,9 @@ function MetricsOverlay({ data, height, selected, expanded }: { data: StationSce
             <div className="mt-1 flex items-center gap-3 text-[11px] text-[#526377]">
               <span><span className="font-semibold text-[#0e1c2b]">{data.utilization !== null ? `${(data.utilization * 100).toFixed(0)}%` : "—"}</span> загрузка</span>
               <span><span className="font-semibold text-[#0e1c2b]">{Math.round(data.queue)}</span> в очереди</span>
+              {Math.round(data.down) > 0 && (
+                <span className="font-semibold text-[#c0392b]">{Math.round(data.down)} в ремонте</span>
+              )}
             </div>
           )}
           {expanded && data.utilization !== null && (
@@ -137,7 +142,7 @@ export function StationAnchor({ data }: { data: StationSceneData }) {
       dispose={null}
     >
       <StationHighlight footprint={layout.footprint} color={color} selected={selected} hovered={hovered} />
-      <EquipmentModel kind={layout.kind} capacity={data.capacity} busy={Math.round(data.busy)} statusColor={color} footprint={layout.footprint} />
+      <EquipmentModel kind={layout.kind} capacity={data.capacity} busy={Math.round(data.busy)} down={Math.round(data.down)} statusColor={color} footprint={layout.footprint} />
       <MetricsOverlay data={data} height={layout.labelHeight} selected={selected} expanded={selected || hovered} />
     </group>
   );

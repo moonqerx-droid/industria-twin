@@ -206,8 +206,22 @@ export function ProcessMnemonic({ nodes, edges, stations }: { nodes: NodeDto[]; 
               </text>
               <rect x={x0 + 16} y={y0 + 94} width={NODE_W - 32} height={6} rx={3} fill="#e8eef5" />
               <rect x={x0 + 16} y={y0 + 94} width={(NODE_W - 32) * Math.min(1, u)} height={6} rx={3} fill={color} />
+              {st && (st.metrics.availability?.mean ?? 1) < 0.995 && (
+                <rect
+                  x={x0 + 16 + (NODE_W - 32) * Math.min(1, u)}
+                  y={y0 + 94}
+                  width={(NODE_W - 32) * Math.max(0, Math.min(1 - u, 1 - (st.metrics.availability?.mean ?? 1)))}
+                  height={6}
+                  fill="#bf3a2b"
+                  opacity={0.55}
+                >
+                  <title>Время в ремонте</title>
+                </rect>
+              )}
               <text x={x0 + 16} y={y0 + 116} fill="#0e1c2b" fontSize="12">
-                Загрузка {fmtPercent(u)}
+                {st && (st.metrics.availability?.mean ?? 1) < 0.995
+                  ? `Загр. ${fmtPercent(u, 0)} · рем. ${fmtPercent(1 - (st.metrics.availability?.mean ?? 1), 0)}`
+                  : `Загрузка ${fmtPercent(u)}`}
               </text>
             </g>
           );

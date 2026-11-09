@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { STATIONS, type ScenarioParameters, type StationId, type StationParameters } from "@/domain/model/demoData";
-import { estimateLoads } from "@/domain/model/loadEstimate";
+import { availabilityOf, estimateLoads } from "@/domain/model/loadEstimate";
 import { DISTRIBUTION_LABELS, distributionMean, type DistributionKind, type DurationDistribution } from "@/domain/simulation/distributions";
 import { fmtDateTime, fmtMinutes, fmtNumber, fmtPercent, fmtRub } from "@/lib/format";
 import type { ScenarioDto } from "@/server/services/scenarioService";
@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/Button";
 import { Panel } from "@/components/ui/Panel";
 import { StatusBadge, StationTag } from "@/components/ui/Status";
 import { NumberInput, SliderField, Stepper } from "./fields";
+import { ScenarioExchange } from "./ScenarioExchange";
 
 interface ApiErrorBody {
   error?: { message?: string; details?: Array<{ path: string; message: string }> | string[] | null };
@@ -265,6 +266,7 @@ export function ScenarioStudio({
             Новый сценарий на основе базового
           </Button>
         )}
+        <ScenarioExchange name={name} description={description} params={params} canEdit={canEdit} />
       </aside>
 
       <div className="min-w-0 space-y-5">
@@ -392,6 +394,29 @@ export function ScenarioStudio({
                     <DistributionEditor stationId={st.id} value={sp.processTime} disabled={paramsDisabled} onChange={(d) => setStation(st.id, { processTime: d })} />
                     <NumberInput label="Ставка ресурса" unit="₽/ч" value={sp.hourlyCostRub} step={50} disabled={paramsDisabled} onChange={(v) => setStation(st.id, { hourlyCostRub: v })} />
                     <NumberInput label="Расходники на операцию" unit="₽" value={sp.consumablesPerOperationRub} step={10} disabled={paramsDisabled} onChange={(v) => setStation(st.id, { consumablesPerOperationRub: v })} />
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-end gap-x-4 gap-y-3 border-t border-line/70 pt-3">
+                    <label className="flex min-h-10 items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={!!sp.failure}
+                        disabled={paramsDisabled}
+                        data-testid={`failure-toggle-${st.id}`}
+                        onChange={(e) => setStation(st.id, { failure: e.target.checked ? { mtbfMin: 600, mttrMin: 30 } : null })}
+                      />
+                      Отказы оборудования
+                    </label>
+                    {sp.failure && (
+                      <>
+                        <div className="w-40">
+                          <NumberInput label="Наработка на отказ (MTBF)" unit="мин" value={sp.failure.mtbfMin} min={10} step={30} disabled={paramsDisabled} onChange={(v) => setStation(st.id, { failure: { ...sp.failure!, mtbfMin: v } })} testId={`mtbf-${st.id}`} />
+                        </div>
+                        <div className="w-40">
+                          <NumberInput label="Время ремонта (MTTR)" unit="мин" value={sp.failure.mttrMin} min={0.5} step={1} disabled={paramsDisabled} onChange={(v) => setStation(st.id, { failure: { ...sp.failure!, mttrMin: v } })} testId={`mttr-${st.id}`} />
+                        </div>
+                        <p className="pb-2 text-xs text-muted">Готовность ≈ {fmtPercent(availabilityOf(sp.failure), 1)}</p>
+                      </>
+                    )}
                   </div>
                   <p className="mt-2 text-xs text-faint">Среднее время операции: {fmtNumber(distributionMean(sp.processTime), 1)} мин</p>
                 </div>

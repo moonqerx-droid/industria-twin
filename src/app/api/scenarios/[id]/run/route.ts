@@ -1,3 +1,4 @@
+import { audit } from "@/server/services/auditService";
 import { requireUser } from "@/server/auth/session";
 import { handler, json } from "@/server/http";
 import { enforce, simulationLimiter } from "@/server/rateLimit";
@@ -10,5 +11,11 @@ export const POST = handler(async (req: Request, ctx: Ctx) => {
   const user = await requireUser(req, "simulation:run");
   const id = idSchema.parse((await ctx.params).id);
   enforce(simulationLimiter, user.id);
-  return json({ run: await runScenarioSimulation(id, user.id) }, { status: 201 });
+  const run = await runScenarioSimulation(id, user.id);
+  await audit(user, "simulation.run", {
+    entityType: "run",
+    entityId: run.id,
+    details: `${run.scenarioName}: ${run.replications} репл., ${run.durationMs} мс`,
+  });
+  return json({ run }, { status: 201 });
 });

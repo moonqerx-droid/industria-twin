@@ -23,6 +23,7 @@ export function buildSimulationConfig(params: ScenarioParameters, seedOverride?:
         processTime: p.processTime,
         hourlyCostRub: p.hourlyCostRub,
         consumablesPerOperationRub: p.consumablesPerOperationRub,
+        failure: p.failure ?? null,
       };
     }),
     quality: {

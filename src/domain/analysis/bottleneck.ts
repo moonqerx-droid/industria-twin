@@ -27,12 +27,20 @@ export interface StationLoadInput {
   avgQueueLength: number;
   avgWaitMin: number;
   queueAtEnd: number;
+  /** Доля времени ресурса в ремонте (1 − доступность); по умолчанию 0. */
+  downtimeShare?: number;
+}
+
+/** Эффективная загрузка: занятость + потери доступности из-за отказов. */
+export function effectiveLoad(s: StationLoadInput): number {
+  return s.utilization + (s.downtimeShare ?? 0);
 }
 
 export function classifyStation(s: StationLoadInput): StationStatus {
   const accumulating = s.queueAtEnd >= STATUS_THRESHOLDS.queueGrowthPerCapacity * s.capacity && s.queueAtEnd >= 3;
-  if (s.utilization >= STATUS_THRESHOLDS.critical || accumulating) return "critical";
-  if (s.utilization >= STATUS_THRESHOLDS.high) return "high";
+  const load = effectiveLoad(s);
+  if (load >= STATUS_THRESHOLDS.critical || accumulating) return "critical";
+  if (load >= STATUS_THRESHOLDS.high) return "high";
   return "normal";
 }
 
@@ -66,7 +74,7 @@ export function rankBottlenecks(stations: StationLoadInput[]): BottleneckFinding
     .sort(
       (a, b) =>
         order[a.status] - order[b.status] ||
-        b.s.utilization - a.s.utilization ||
+        effectiveLoad(b.s) - effectiveLoad(a.s) ||
         b.s.avgWaitMin - a.s.avgWaitMin ||
         a.s.stationId.localeCompare(b.s.stationId),
     )
@@ -80,7 +88,9 @@ export function rankBottlenecks(stations: StationLoadInput[]): BottleneckFinding
       queueAtEnd: s.queueAtEnd,
       rank: i + 1,
       explanation:
-        `${s.name}: загрузка ${pct(s.utilization)}, средняя очередь ${num(s.avgQueueLength, 2)} шт., ` +
+        `${s.name}: загрузка ${pct(s.utilization)}` +
+        ((s.downtimeShare ?? 0) >= 0.005 ? ` + ${pct(s.downtimeShare ?? 0)} в ремонте` : "") +
+        `, средняя очередь ${num(s.avgQueueLength, 2)} шт., ` +
         `среднее ожидание ${num(s.avgWaitMin)} мин, в очереди на конец горизонта ${num(s.queueAtEnd)} шт.`,
     }));
 }

@@ -19,6 +19,8 @@ interface SceneState {
   quality: QualityLevel;
   effectiveQuality: "low" | "high";
   replayFrame: number;
+  /** Непрерывное модельное время воспроизведения, мин (кадр = последний снимок не позже этого времени). */
+  replayTime: number;
   playing: boolean;
   speed: number;
   setMode: (m: SceneMode) => void;
@@ -26,6 +28,8 @@ interface SceneState {
   setQuality: (q: QualityLevel) => void;
   setEffectiveQuality: (q: "low" | "high") => void;
   setReplayFrame: (i: number) => void;
+  /** Перемотка: модельное время и соответствующий кадр одновременно. */
+  seekReplay: (time: number, frame: number) => void;
   setPlaying: (p: boolean) => void;
   setSpeed: (s: number) => void;
 }
@@ -37,6 +41,7 @@ export const useScene = create<SceneState>((set) => ({
   quality: "auto",
   effectiveQuality: "high",
   replayFrame: 0,
+  replayTime: 0,
   playing: false,
   speed: 1,
   setMode: (mode) => set({ mode, playing: false }),
@@ -44,6 +49,7 @@ export const useScene = create<SceneState>((set) => ({
   setQuality: (quality) => set({ quality }),
   setEffectiveQuality: (effectiveQuality) => set({ effectiveQuality }),
   setReplayFrame: (replayFrame) => set({ replayFrame }),
+  seekReplay: (replayTime, replayFrame) => set((s) => (s.replayFrame === replayFrame ? { replayTime } : { replayTime, replayFrame })),
   setPlaying: (playing) => set({ playing }),
   setSpeed: (speed) => set({ speed }),
 }));

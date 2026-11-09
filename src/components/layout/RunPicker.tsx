@@ -16,7 +16,7 @@ export function RunPicker({ runs, currentId }: { runs: RunOption[]; currentId: s
   const pathname = usePathname();
   const params = useSearchParams();
   return (
-    <label className="flex items-center gap-2 text-sm text-muted">
+    <label className="flex w-full min-w-0 items-center gap-2 text-sm text-muted sm:w-auto">
       <span className="hidden sm:inline">Прогон</span>
       <select
         value={currentId ?? ""}
@@ -25,7 +25,7 @@ export function RunPicker({ runs, currentId }: { runs: RunOption[]; currentId: s
           next.set("run", e.target.value);
           router.push(`${pathname}?${next.toString()}`);
         }}
-        className="max-w-full sm:max-w-[20rem] rounded-[var(--radius-control)] border border-line-strong bg-surface px-2.5 py-1.5 text-ink"
+        className="w-full min-w-0 max-w-full sm:w-auto sm:max-w-[20rem] rounded-[var(--radius-control)] border border-line-strong bg-surface px-2.5 py-1.5 text-ink"
       >
         {runs.map((r) => (
           <option key={r.id} value={r.id}>

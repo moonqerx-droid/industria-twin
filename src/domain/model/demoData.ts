@@ -6,6 +6,7 @@
  * демонстрационных данных: из него заполняется БД (prisma/seed.ts) и строятся тестовые конфигурации.
  */
 import type { DurationDistribution } from "../simulation/distributions";
+import type { FailureConfig } from "../simulation/types";
 
 export const FACTORY_ID = "factory-pump-01";
 export const PROCESS_ID = "process-pump-assembly";
@@ -181,6 +182,8 @@ export interface StationParameters {
   processTime: DurationDistribution;
   hourlyCostRub: number;
   consumablesPerOperationRub: number;
+  /** Отказы оборудования (MTBF/MTTR); null — участок моделируется без отказов. */
+  failure?: FailureConfig | null;
 }
 
 export interface ScenarioParameters {
@@ -212,9 +215,10 @@ export const BASELINE_PARAMETERS: ScenarioParameters = {
   replications: 20,
   stations: {
     "st-receiving": { capacity: 1, processTime: { kind: "triangular", min: 4, mode: 5.5, max: 9 }, hourlyCostRub: 900, consumablesPerOperationRub: 50 },
-    "st-machining": { capacity: 3, processTime: { kind: "triangular", min: 24, mode: 29, max: 38 }, hourlyCostRub: 2600, consumablesPerOperationRub: 450 },
+    // Отказы: станок ЧПУ в среднем раз в 10 ч работы, ремонт ~30 мин; стенд — раз в 15 ч, ремонт ~20 мин.
+    "st-machining": { capacity: 3, processTime: { kind: "triangular", min: 24, mode: 29, max: 38 }, hourlyCostRub: 2600, consumablesPerOperationRub: 450, failure: { mtbfMin: 600, mttrMin: 30 } },
     "st-assembly": { capacity: 2, processTime: { kind: "triangular", min: 17, mode: 21, max: 29 }, hourlyCostRub: 1500, consumablesPerOperationRub: 300 },
-    "st-testing": { capacity: 1, processTime: { kind: "triangular", min: 7, mode: 9, max: 12 }, hourlyCostRub: 3200, consumablesPerOperationRub: 120 },
+    "st-testing": { capacity: 1, processTime: { kind: "triangular", min: 7, mode: 9, max: 12 }, hourlyCostRub: 3200, consumablesPerOperationRub: 120, failure: { mtbfMin: 900, mttrMin: 20 } },
     "st-rework": { capacity: 1, processTime: { kind: "triangular", min: 10, mode: 15, max: 24 }, hourlyCostRub: 1700, consumablesPerOperationRub: 600 },
     "st-packing": { capacity: 1, processTime: { kind: "triangular", min: 6, mode: 7.5, max: 10 }, hourlyCostRub: 1100, consumablesPerOperationRub: 350 },
   },
@@ -240,7 +244,7 @@ export const DEMO_SCENARIOS: DemoScenarioDefinition[] = [
   {
     id: "sc-baseline",
     name: "Базовый сценарий",
-    description: "Текущая конфигурация: 5,5 задания/ч, 3 станка ЧПУ, 2 сборочных поста, 1 испытательный стенд.",
+    description: "Текущая конфигурация: 5,5 задания/ч, 3 станка ЧПУ, 2 сборочных поста, 1 испытательный стенд; отказы ЧПУ (MTBF 600 / MTTR 30 мин) и стенда (900 / 20 мин).",
     isBaseline: true,
     parameters: BASELINE_PARAMETERS,
   },
@@ -264,6 +268,22 @@ export const DEMO_SCENARIOS: DemoScenarioDefinition[] = [
     description: "Добавлен второй испытательный стенд; остальные параметры как в базовом сценарии.",
     isBaseline: false,
     parameters: withStation(BASELINE_PARAMETERS, "st-testing", { capacity: 2 }),
+  },
+  {
+    id: "sc-tpm",
+    name: "Программа ТОиР (TPM) для ЧПУ и стенда",
+    description:
+      "Плановое обслуживание и запас ЗИП: наработка на отказ ×1,5, время ремонта ×0,4 (ЧПУ 900 / 12 мин, стенд 1350 / 8 мин). " +
+      "Стоимость часа ЧПУ и стенда выше на 150 ₽ — затраты на обслуживание.",
+    isBaseline: false,
+    parameters: {
+      ...BASELINE_PARAMETERS,
+      stations: {
+        ...BASELINE_PARAMETERS.stations,
+        "st-machining": { ...BASELINE_PARAMETERS.stations["st-machining"], hourlyCostRub: 2750, failure: { mtbfMin: 900, mttrMin: 12 } },
+        "st-testing": { ...BASELINE_PARAMETERS.stations["st-testing"], hourlyCostRub: 3350, failure: { mtbfMin: 1350, mttrMin: 8 } },
+      },
+    },
   },
   {
     id: "sc-quality",
@@ -323,4 +343,66 @@ export const TOURS: TourDefinition[] = [
       { poiId: "poi-packing", title: "Отгрузка", narrative: "Готовые насосы упаковываются и отгружаются. Выпуск за смену — главный итоговый показатель." },
     ],
   },
+  {
+    id: "tour-students",
+    name: "Как рождается насос",
+    audience: "Абитуриенты и студенты",
+    description: "Технологический маршрут изделия: какие операции и профессии стоят за каждым участком и где здесь инженерные задачи.",
+    stops: [
+      { poiId: "poi-overview", title: "Завод в одном цехе", narrative: "Центробежный насос перекачивает жидкость за счёт вращения рабочего колеса. Чтобы его сделать, нужны пять участков и несколько профессий: кладовщик, оператор станков с ЧПУ, сборщик, испытатель, упаковщик." },
+      { poiId: "poi-machining", title: "Станки с ЧПУ", narrative: "Корпус и вал обрабатываются по программе. Инженер-технолог пишет управляющую программу и подбирает инструмент; от точности здесь зависят вибрация и ресурс насоса. Посмотрите на табличку участка: она показывает рассчитанную загрузку станков." },
+      { poiId: "poi-assembly", title: "Сборка", narrative: "Сборщик устанавливает рабочее колесо, подшипники и торцевое уплотнение и соединяет насос с электродвигателем. Ошибка на сборке обнаружится только на испытаниях — поэтому здесь важны стандарты работы." },
+      { poiId: "poi-testing", title: "Испытания", narrative: "На стенде измеряют напор, расход, вибрацию и герметичность — так проверяют, что насос соответствует паспорту. Решение «годен / доработка» принимает ОТК." },
+      { poiId: "poi-overview", title: "Где здесь математика", narrative: "Весь цех описан дискретно-событийной моделью: каждое изделие, каждая операция и каждый отказ — событие с временем. Модель позволяет проверить решение до того, как его внедрят на реальном заводе. Это и есть цифровой двойник." },
+    ],
+  },
+  {
+    id: "tour-management",
+    name: "Где теряются время и деньги",
+    audience: "Руководство, партнёры, заказчики",
+    description: "Маршрут по узким местам и проверенным моделью решениям: от отказов станков до программы качества.",
+    stops: [
+      { poiId: "poi-overview", title: "Итоги смены", narrative: "Показатели внизу карточки — результат расчёта выбранного прогона, а не презентационные цифры. Карточка кейса показывает главный риск: что будет при росте спроса." },
+      { poiId: "poi-machining", title: "Отказы на мехобработке", narrative: "Узкое место цеха с учётом отказов. Станки часть времени стоят в ремонте — в режиме воспроизведения такой станок обозначен ограждением. Кейс сравнивает программу ТОиР с базовым вариантом." },
+      { poiId: "poi-assembly", title: "Дополнительный пост", narrative: "Второй кандидат на расширение. Кейс показывает, что дополнительный пост сокращает цикл, — и проверяет, снижается ли при этом стоимость единицы." },
+      { poiId: "poi-testing", title: "Стенд: покупать ли второй", narrative: "Пример решения, которое выглядит логичным, но требует проверки: сравните эффект второго стенда с его стоимостью." },
+      { poiId: "poi-rework", title: "Цена брака", narrative: "Каждый возврат на доработку — повторная операция и повторные испытания. Кейс программы качества показывает эффект снижения брака на цикл и стоимость." },
+    ],
+  },
+  {
+    id: "tour-onboarding",
+    name: "Первый день в цехе",
+    audience: "Новые сотрудники",
+    description: "Ориентирование: зоны цеха, движение изделия, сигналы оборудования и что делать при отказе.",
+    stops: [
+      { poiId: "poi-overview", title: "Зоны A–E", narrative: "Цех разделён на зоны, обозначенные на полу буквами A–E. Изделие движется слева направо; проходы вдоль конвейера свободны от материалов. Цвет контура зоны в модели — состояние участка: зелёный — норма, жёлтый — высокая загрузка, красный — перегрузка." },
+      { poiId: "poi-receiving", title: "Склад и комплектация", narrative: "Работа начинается с комплекта деталей под задание. Комплект собирается целиком — так сборщик не ищет детали на участке." },
+      { poiId: "poi-machining", title: "Сигнальные колонны", narrative: "У каждого станка — сигнальная колонна. Красный сигнал и ограждение означают, что оборудование в ремонте: не включать и не снимать ограждение, сообщить мастеру." },
+      { poiId: "poi-testing", title: "Испытания и ОТК", narrative: "Испытательный стенд работает под давлением — находиться в зоне испытаний можно только по допуску. Изделие с дефектом получает маркировку и уходит на доработку." },
+      { poiId: "poi-packing", title: "Отгрузка", narrative: "Готовые насосы консервируют, маркируют и упаковывают. Паллеты в зоне E — продукция к отгрузке, не загромождайте проезд погрузчика." },
+    ],
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Кейсы точек интереса: связь «тур → сценарий → метрика двойника»
+// ---------------------------------------------------------------------------
+
+export interface PoiCaseDefinition {
+  poiId: string;
+  /** Сценарий, рассчитанный результат которого сравнивается с базовым. */
+  scenarioId: string;
+  title: string;
+  /** Управленческий вопрос, на который отвечает кейс. */
+  question: string;
+  /** Сводные показатели, выводимые в карточке кейса. */
+  metricKeys: string[];
+}
+
+export const POI_CASES: PoiCaseDefinition[] = [
+  { poiId: "poi-overview", scenarioId: "sc-demand-up", title: "Выдержит ли цех рост спроса на 20%?", question: "Как изменятся выпуск, цикл и незавершённое производство при росте заказов без новых ресурсов.", metricKeys: ["completed", "cycleTimeAvgMin", "wipEnd"] },
+  { poiId: "poi-machining", scenarioId: "sc-tpm", title: "ТОиР вместо нового станка", question: "Отказы съедают около 5% времени станков. Окупится ли программа планового обслуживания без покупки оборудования?", metricKeys: ["downtimeMin", "cycleTimeAvgMin", "costPerUnitRub"] },
+  { poiId: "poi-assembly", scenarioId: "sc-assembly-plus", title: "Третий сборочный пост", question: "Окупается ли дополнительный пост на текущем узком месте.", metricKeys: ["cycleTimeAvgMin", "costPerUnitRub", "wipEnd"] },
+  { poiId: "poi-testing", scenarioId: "sc-testing-plus", title: "Второй испытательный стенд", question: "Стоит ли покупать второй стенд, если он не является узким местом.", metricKeys: ["cycleTimeAvgMin", "costPerUnitRub", "completed"] },
+  { poiId: "poi-rework", scenarioId: "sc-quality", title: "Программа качества сборки", question: "Что даёт снижение брака с 14% до 5%: меньше доработок, короче цикл, ниже стоимость.", metricKeys: ["defectRate", "reworkCount", "costPerUnitRub"] },
 ];

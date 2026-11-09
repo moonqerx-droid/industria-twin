@@ -36,6 +36,24 @@ model User {
   sessions     Session[]
   scenarios    Scenario[]
   runs         SimulationRun[]
+  auditEntries AuditLog[]
+}
+
+/// Журнал аудита действий пользователей. Минимизация ПДн: хранится только логин-псевдоним;
+/// при удалении пользователя его записи обезличиваются (userId → null, userLogin → «удалённый пользователь»).
+model AuditLog {
+  id         String   @id @default(cuid())
+  at         DateTime @default(now())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userLogin  String
+  action     String // login.success | login.failure | logout | scenario.* | simulation.run | run.delete | user.*
+  entityType String?
+  entityId   String?
+  details    String? // краткое описание без персональных данных
+
+  @@index([at])
+  @@index([action])
 }
 
 /// Серверная сессия: позволяет отзывать доступ (выход, блокировка) при подписанном cookie.
@@ -190,6 +208,8 @@ model ScenarioStationParameter {
   timeSd                     Float? // sd (normal)
   hourlyCostRub              Float
   consumablesPerOperationRub Float
+  mtbfMin                    Float? // средняя наработка на отказ единицы ресурса, мин (null — без отказов)
+  mttrMin                    Float? // среднее время восстановления, мин
 
   @@unique([scenarioId, stationId])
 }

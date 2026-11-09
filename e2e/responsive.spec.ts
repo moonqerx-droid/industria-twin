@@ -10,6 +10,12 @@ test("ключевые страницы без горизонтальной пр
     await expect(page.locator("main h1")).toBeVisible();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(overflow, `горизонтальная прокрутка на ${path}`).toBeLessThanOrEqual(1);
+    // На мобильных браузер расширяет layout viewport под широкий контент — тогда innerWidth > ширины экрана.
+    const widened = await page.evaluate(() => {
+      const vv = window.visualViewport;
+      return vv ? document.documentElement.clientWidth - vv.width * vv.scale : 0;
+    });
+    expect(widened, `контент шире экрана на ${path}`).toBeLessThanOrEqual(1);
   }
 });
 

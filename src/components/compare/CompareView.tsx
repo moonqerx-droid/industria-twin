@@ -27,15 +27,109 @@ const VERDICT_STYLE: Record<ChangeVerdict, string> = {
 
 function DiffCell({ m, def }: { m: MetricComparison; def: { displayScale?: number; digits: number; unit: string } }) {
   const scale = def.displayScale ?? 1;
+  const ci = m.ci95 === null ? null : (m.ci95 * scale).toLocaleString("ru-RU", { maximumFractionDigits: def.digits });
   return (
-    <div className={clsx("text-xs", VERDICT_STYLE[m.verdict])}>
+    <div
+      className={clsx("text-xs", VERDICT_STYLE[m.verdict])}
+      title={ci ? `95% ДИ разности: ±${ci} ${def.unit} (${m.method === "paired" ? "парное сравнение, CRN" : "Уэлч"})` : undefined}
+    >
       <span className="inline-flex items-center gap-1">
         {fmtSigned(m.absDiff === null ? null : m.absDiff * scale, def.digits)}
+        {ci && <span className="text-faint">±{ci}</span>}
         {m.relDiff !== null && ` (${fmtSigned(m.relDiff * 100, 1, "%")})`}
       </span>
       <div className="text-faint">{VERDICT_LABELS[m.verdict]}</div>
     </div>
   );
+}
+
+/** Краткий вывод для руководителя: правило по различимым изменениям ключевых показателей. */
+function ExecutiveVerdict({ alt, baselineBottleneck }: { alt: ComparisonDto["alternatives"][number]; baselineBottleneck: string | null }) {
+  const get = (k: string) => alt.aggregate.find((m) => m.key === k);
+  const keys = ["cycleTimeAvgMin", "completed", "costPerUnitRub", "wipEnd"];
+  const better = keys.filter((k) => get(k)?.verdict === "better");
+  const worse = keys.filter((k) => get(k)?.verdict === "worse");
+  const cost = get("costPerUnitRub");
+  const tone: "good" | "bad" | "mixed" | "none" =
+    better.length > 0 && worse.length === 0 ? "good" : worse.length > 0 && better.length === 0 ? "bad" : better.length + worse.length > 0 ? "mixed" : "none";
+  const title = {
+    good: "Вариант улучшает показатели",
+    bad: "Вариант ухудшает показатели",
+    mixed: "Компромисс: есть улучшения и ухудшения",
+    none: "Различимого эффекта нет",
+  }[tone];
+  const parts = [...better, ...worse].map((k) => {
+    const m = get(k)!;
+    const d = AGGREGATE_METRICS[k as AggregateMetricKey];
+    const scale = d.displayScale ?? 1;
+    const label = /^[А-ЯЁA-Z]{2}/.test(d.label) ? d.label : d.label.charAt(0).toLowerCase() + d.label.slice(1);
+    return `${label} ${fmtSigned(m.absDiff === null ? null : m.absDiff * scale, d.digits)} ${d.unit}${
+      m.relDiff !== null ? ` (${fmtSigned(m.relDiff * 100, 1, "%")})` : ""
+    }`;
+  });
+  const shift = alt.bottleneck?.name !== baselineBottleneck;
+  const advice =
+    tone === "good"
+      ? cost?.verdict === "better"
+        ? "Рекомендуется к проверке на реальном участке: эффект различим и снижает стоимость единицы."
+        : "Эффект различим; оцените, оправдывают ли его дополнительные затраты."
+      : tone === "none"
+        ? cost?.verdict === "worse"
+          ? "Затраты растут без различимого эффекта — вариант нецелесообразен."
+          : "Изменение не влияет на ключевые показатели модели — ищите другое узкое место."
+        : tone === "bad"
+          ? "Вариант не рекомендуется без дополнительных мер."
+          : "Требуется управленческое решение: сопоставьте выигрыш и потери.";
+  const style = {
+    good: "border-ok/40 bg-ok/5",
+    bad: "border-crit/40 bg-crit/5",
+    mixed: "border-warn/40 bg-warn/5",
+    none: "border-line bg-raised",
+  }[tone];
+  return (
+    <div className={clsx("mb-5 rounded-[var(--radius-control)] border px-4 py-3", style)} data-testid="executive-verdict">
+      <p className="text-sm font-semibold">{title}</p>
+      {parts.length > 0 && <p className="mt-1 text-sm text-muted">Различимо: {parts.join("; ")}.</p>}
+      {shift && alt.bottleneck && (
+        <p className="mt-1 text-sm text-muted">
+          Узкое место смещается: {baselineBottleneck ?? "нет"} → {alt.bottleneck.name}.
+        </p>
+      )}
+      <p className="mt-1 text-sm">{advice}</p>
+    </div>
+  );
+}
+
+/** CSV сравнения (разделитель «;», BOM — корректная кириллица в Excel). */
+function exportCsv(data: ComparisonDto) {
+  const q = (v: string) => `"${v.replace(/"/g, '""')}"`;
+  const num = (v: number | null, d: number) => (v === null || !Number.isFinite(v) ? "" : v.toFixed(d).replace(".", ","));
+  const rows: string[][] = [["Сценарий", "Показатель", "Единица", "Базовый", "Альтернатива", "Разность", "ДИ 95% ±", "Метод", "Вердикт"]];
+  for (const alt of data.alternatives) {
+    for (const m of alt.aggregate) {
+      const d = AGGREGATE_METRICS[m.key as AggregateMetricKey];
+      const sc = d.displayScale ?? 1;
+      const dig = Math.max(d.digits, 2);
+      rows.push([
+        alt.run.scenarioName,
+        d.label,
+        d.unit,
+        num(m.before === null ? null : m.before * sc, dig),
+        num(m.after === null ? null : m.after * sc, dig),
+        num(m.absDiff === null ? null : m.absDiff * sc, dig),
+        num(m.ci95 === null ? null : m.ci95 * sc, dig),
+        m.method === "paired" ? "парное (CRN)" : "Уэлч",
+        VERDICT_LABELS[m.verdict],
+      ]);
+    }
+  }
+  const csv = "\ufeff" + rows.map((r) => r.map(q).join(";")).join("\r\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `sravnenie-${data.baseline.scenarioName.replace(/[^\p{L}\d]+/gu, "-")}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function Selector({ runs, baselineId, altIds }: { runs: RunSummaryDto[]; baselineId: string; altIds: string[] }) {
@@ -141,8 +235,15 @@ export function CompareView({ data, runs, focusStationId }: { data: ComparisonDt
   return (
     <div className="grid gap-5 xl:grid-cols-[300px_1fr]">
       <div className="space-y-5">
-        <Panel title="Выбор прогонов">
+        <Panel title="Выбор прогонов" className="no-print">
           <Selector runs={runs} baselineId={data.baseline.id} altIds={data.alternatives.map((a) => a.run.id)} />
+        </Panel>
+        <Panel title="Отчёт" className="no-print">
+          <p className="text-sm text-muted">Выгрузите таблицу «до/после» или сохраните страницу как PDF для совещания.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button onClick={() => exportCsv(data)} data-testid="export-csv">Скачать CSV</Button>
+            <Button onClick={() => window.print()}>Печать / PDF</Button>
+          </div>
         </Panel>
         <Panel title="Метод сравнения">
           <p className="text-sm text-muted">{data.method}</p>
@@ -161,8 +262,11 @@ export function CompareView({ data, runs, focusStationId }: { data: ComparisonDt
                   {alt.run.scenarioName}
                 </span>
               }
-              subtitle={`Сравнение с «${data.baseline.scenarioName}»: ${alt.run.replications} и ${data.baseline.replications} репликаций`}
+              subtitle={`Сравнение с «${data.baseline.scenarioName}»: ${alt.run.replications} и ${data.baseline.replications} репликаций · ${
+                data.pairedFlags[i] ? "парное сравнение (общие случайные числа)" : "независимые выборки (Уэлч)"
+              }`}
             >
+              <ExecutiveVerdict alt={alt} baselineBottleneck={data.baseline.bottleneck?.name ?? null} />
               <div className="grid gap-5 md:grid-cols-2">
                 <div>
                   <h3 className="text-sm font-semibold">Что изменено в параметрах</h3>

@@ -1,7 +1,13 @@
 import type { DurationDistribution } from "./distributions";
 
 /** Версия движка: сохраняется с каждым прогоном для воспроизводимости. */
-export const ENGINE_VERSION = "1.0.0";
+export const ENGINE_VERSION = "1.1.0";
+
+/** Версии движка, использующие общие случайные числа (CRN) и допускающие парное сравнение репликаций. */
+export function engineSupportsCrn(version: string): boolean {
+  const [maj = 0, min = 0] = version.split(".").map(Number);
+  return maj > 1 || (maj === 1 && min >= 1);
+}
 
 /** Жёсткие ограничения безопасности движка. */
 export const ENGINE_LIMITS = {
@@ -31,6 +37,20 @@ export interface StationConfig {
   hourlyCostRub: number;
   /** Расходные материалы на одну начатую операцию, ₽. */
   consumablesPerOperationRub: number;
+  /** Отказы оборудования; null/undefined — без отказов. */
+  failure?: FailureConfig | null;
+}
+
+/**
+ * Отказы оборудования (неупреждающая модель): отказы участка образуют пуассоновский поток
+ * с интенсивностью capacity / MTBF; отказавшая единица выводится из работы после завершения
+ * текущей операции и возвращается через экспоненциальное время ремонта со средним MTTR.
+ */
+export interface FailureConfig {
+  /** Средняя наработка на отказ одной единицы ресурса, мин. */
+  mtbfMin: number;
+  /** Среднее время восстановления, мин. */
+  mttrMin: number;
 }
 
 export interface QualityGateConfig {
@@ -77,6 +97,9 @@ export const EVENT_TYPES = [
   "SCRAP",
   "DEPARTURE",
   "HORIZON_END",
+  // Добавлены в 1.1.0 в конец списка: индексы прежних типов в сжатом журнале не меняются.
+  "BREAKDOWN",
+  "REPAIR",
 ] as const;
 export type SimulationEventType = (typeof EVENT_TYPES)[number];
 
@@ -125,6 +148,12 @@ export interface StationResult {
   idleCostRub: number;
   /** Пиковое число одновременно обслуживаемых заданий (для проверки вместимости). */
   peakBusy: number;
+  /** Число отказов оборудования за горизонт. */
+  failures: number;
+  /** Интеграл числа единиц в ремонте по времени, станко-мин. */
+  downtimeMin: number;
+  /** Доступность = 1 − downtimeMin / (capacity × горизонт), доля 0..1. */
+  availability: number;
 }
 
 export interface Snapshot {
@@ -132,8 +161,8 @@ export interface Snapshot {
   wip: number;
   completed: number;
   scrapped: number;
-  /** stationId → [в очереди, в обработке] */
-  stations: Record<string, [number, number]>;
+  /** stationId → [в очереди, в обработке, в ремонте] */
+  stations: Record<string, [number, number, number]>;
 }
 
 export interface AggregateResult {
@@ -162,6 +191,10 @@ export interface AggregateResult {
   totalCostRub: number;
   idleCostRub: number;
   costPerUnitRub: number | null;
+  /** Отказы оборудования по всем участкам. */
+  failures: number;
+  /** Суммарное время единиц ресурса в ремонте, мин. */
+  downtimeMin: number;
 }
 
 export interface SimulationResult {

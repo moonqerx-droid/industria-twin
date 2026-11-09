@@ -1,3 +1,4 @@
+import { audit } from "@/server/services/auditService";
 import { requireUser } from "@/server/auth/session";
 import { handler, json } from "@/server/http";
 import { deleteRun, getRunDetail } from "@/server/services/simulationService";
@@ -11,7 +12,9 @@ export const GET = handler(async (req: Request, ctx: Ctx) => {
 });
 
 export const DELETE = handler(async (req: Request, ctx: Ctx) => {
-  await requireUser(req, "run:delete");
-  await deleteRun(idSchema.parse((await ctx.params).id));
+  const user = await requireUser(req, "run:delete");
+  const id = idSchema.parse((await ctx.params).id);
+  await deleteRun(id);
+  await audit(user, "run.delete", { entityType: "run", entityId: id });
   return json({ ok: true });
 });

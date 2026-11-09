@@ -20,7 +20,7 @@ test.describe("Доступ", () => {
 test("дашборд показывает рассчитанные KPI и узкое место", async ({ page }) => {
   await login(page, "engineer");
   await expect(page.getByRole("heading", { name: "Дашборд производства" })).toBeVisible();
-  await expect(page.getByText("Выпуск за горизонт")).toBeVisible();
+  await expect(page.getByText("Выпуск за горизонт", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: /Узкое место:/ })).toBeVisible();
   await expect(page.getByRole("table", { name: /Состояние производственных участков/ }).locator("tbody tr")).toHaveCount(6);
 });
@@ -95,5 +95,82 @@ test("без WebGL показывается план цеха с теми же �
 test("администратор видит раздел администрирования", async ({ page }) => {
   await login(page, "admin", "/admin");
   await expect(page.getByRole("heading", { name: "Администрирование" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "engineer", exact: true })).toBeVisible();
+  await expect(page.locator('[data-testid="user-admin"] tr[data-login="engineer"]')).toBeVisible();
+});
+
+test("советник по ресурсам: рекомендация → сценарий → парное сравнение с выводом", async ({ page }) => {
+  await login(page, "engineer");
+  const advisor = page.getByTestId("resource-advisor");
+  await expect(advisor.locator("tbody tr")).toHaveCount(7);
+  await expect(advisor.getByText(/Рекомендация:/)).toBeVisible();
+  await advisor.getByRole("button", { name: "Проверить и сравнить" }).first().click();
+  await expect(page).toHaveURL(/\/compare\?baseline=.+&runs=/, { timeout: 30_000 });
+  await expect(page.getByTestId("executive-verdict")).toBeVisible();
+  await expect(page.getByText(/парное сравнение \(общие случайные числа\)/).first()).toBeVisible();
+  const download = page.waitForEvent("download");
+  await page.getByTestId("export-csv").click();
+  expect((await download).suggestedFilename()).toMatch(/\.csv$/);
+});
+
+test("наблюдатель видит советника без кнопок изменения", async ({ page }) => {
+  await login(page, "viewer");
+  const advisor = page.getByTestId("resource-advisor");
+  await expect(advisor.locator("tbody tr")).toHaveCount(7);
+  await expect(advisor.getByRole("button", { name: "Проверить и сравнить" })).toHaveCount(0);
+});
+
+test("кейс точки интереса в 3D-туре ведёт к сравнению", async ({ page }) => {
+  await login(page, "viewer", "/factory?station=st-machining");
+  const card = page.getByTestId("poi-case");
+  await expect(card).toBeVisible();
+  await expect(card).toContainText("ТОиР");
+  await card.getByRole("link", { name: /Открыть сравнение/ }).click();
+  await expect(page).toHaveURL(/\/compare\?baseline=.+&runs=.+&station=st-machining/);
+  await expect(page.getByTestId("executive-verdict")).toBeVisible();
+});
+
+test("кривая пропускной способности показывает запас мощности и таблицу значений", async ({ page }) => {
+  await login(page, "viewer");
+  const curve = page.getByTestId("capacity-curve");
+  await expect(curve.locator("figure")).toHaveCount(2, { timeout: 30_000 });
+  await expect(curve.getByText(/установившейся мощности|Запас мощности/).first()).toBeVisible();
+  await curve.getByText("Таблица значений").click();
+  await expect(curve.locator("tbody tr")).toHaveCount(10);
+});
+
+test("маршруты для разных аудиторий переключаются и сохраняются в URL", async ({ page }) => {
+  await login(page, "viewer", "/factory");
+  await page.getByTestId("tour-select").selectOption("tour-onboarding");
+  await expect(page.getByRole("heading", { name: "Первый день в цехе" })).toBeVisible();
+  await expect(page).toHaveURL(/tour=tour-onboarding/);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Первый день в цехе" })).toBeVisible();
+});
+
+test("импорт CSV участков создаёт новый сценарий; ошибки показываются с номером строки", async ({ page }) => {
+  await login(page, "engineer", "/scenarios");
+  await expect(page.getByTestId("scenario-exchange")).toHaveAttribute("data-ready", "true");
+  const input = page.getByTestId("import-file");
+  await input.setInputFiles({ name: "bad.csv", mimeType: "text/csv", buffer: Buffer.from("code;capacity\nZ9;1\n") });
+  await expect(page.getByTestId("import-errors")).toContainText("Строка 2: неизвестный участок");
+  await input.setInputFiles({ name: "fakt.csv", mimeType: "text/csv", buffer: Buffer.from("code;capacity\nC1;3\n") });
+  await expect(page).toHaveURL(/\/scenarios\?id=/);
+  await expect(page.getByTestId("scenario-name")).toHaveValue("Импорт CSV: fakt.csv");
+  await expect(page.getByTestId("capacity-st-assembly")).toHaveText("3");
+  const download = page.waitForEvent("download");
+  await page.getByTestId("export-stations-csv").click();
+  expect((await download).suggestedFilename()).toMatch(/\.csv$/);
+});
+
+test("администратор создаёт пользователя, действие попадает в журнал аудита", async ({ page }) => {
+  await login(page, "admin", "/admin");
+  const form = page.getByRole("form", { name: "Новый пользователь" });
+  await form.getByLabel("Логин").fill("e2e.user");
+  await form.getByLabel("Псевдоним (без ФИО)").fill("Проверка E2E");
+  await form.getByLabel("Пароль").fill("E2e#Password2026");
+  await form.getByRole("button", { name: "Создать" }).click();
+  await expect(page.getByRole("status")).toContainText("Пользователь e2e.user создан");
+  await expect(page.locator('[data-testid="user-admin"] tr[data-login="e2e.user"]')).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId("audit-log")).toContainText("Создание пользователя");
 });

@@ -29,13 +29,14 @@ describe("Демонстрационная модель: согласованн�
 });
 
 describe("Аналитическая оценка загрузки", () => {
-  it("ρ = λ·v·E[S]/c; испытания учитывают повторные посещения", () => {
+  it("ρ = λ·v·E[S]/(c·A); испытания учитывают повторные посещения и готовность стенда", () => {
     const rho = estimateLoads(BASELINE_PARAMETERS);
     const lambda = BASELINE_PARAMETERS.arrivalRatePerHour / 60;
     expect(rho["st-assembly"]).toBeCloseTo((lambda * ((17 + 21 + 29) / 3)) / 2, 6);
     const p = BASELINE_PARAMETERS.defectProbability;
     const q = BASELINE_PARAMETERS.retestDefectProbability;
-    expect(rho["st-testing"]).toBeCloseTo(lambda * (1 + p + p * q) * ((7 + 9 + 12) / 3), 6);
+    // Стенд с отказами: MTBF 900, MTTR 20 → готовность A = 900 / 920.
+    expect(rho["st-testing"]).toBeCloseTo((lambda * (1 + p + p * q) * ((7 + 9 + 12) / 3)) / (900 / 920), 6);
     expect(rho["st-rework"]).toBeCloseTo(lambda * (p + p * q) * ((10 + 15 + 24) / 3), 6);
   });
   it("добавление ресурса снижает оценку загрузки обратно пропорционально", () => {

@@ -11,10 +11,15 @@ import { LinkButton } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Kpi } from "@/components/ui/Kpi";
 import { Panel } from "@/components/ui/Panel";
+import { PrintButton } from "@/components/ui/PrintButton";
 import { SyntheticNote } from "@/components/ui/SyntheticNote";
 import { AGGREGATE_METRICS, formatMetricValue, type AggregateMetricKey } from "@/domain/model/metrics";
 import { fmtDateTime, fmtMinutes, fmtNumber } from "@/lib/format";
 import { buildStationViews } from "@/lib/views";
+import { ResourceAdvisor } from "@/components/advisor/ResourceAdvisor";
+import { CapacityCurvePanel } from "@/components/charts/CapacityCurvePanel";
+import { can } from "@/server/auth/permissions";
+import { getCurrentUser } from "@/server/auth/session";
 import { getProductionModel } from "@/server/services/modelService";
 import { getReplay, getRunDetail, latestRunPerScenario, listRuns, resolveRunId } from "@/server/services/simulationService";
 
@@ -34,7 +39,14 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       </>
     );
   }
-  const [run, replay, runs, latest] = await Promise.all([getRunDetail(runId), getReplay(runId), listRuns({ limit: 40 }), latestRunPerScenario()]);
+  const [run, replay, runs, latest, user] = await Promise.all([
+    getRunDetail(runId),
+    getReplay(runId),
+    listRuns({ limit: 40 }),
+    latestRunPerScenario(),
+    getCurrentUser(),
+  ]);
+  const canCreate = !!user && can(user.role, "scenario:write") && can(user.role, "simulation:run");
   const stations = buildStationViews(model, run);
   const a = run.aggregate;
   const val = (k: AggregateMetricKey) => formatMetricValue(AGGREGATE_METRICS[k], a[k]?.mean);
@@ -59,7 +71,12 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             {run.scenarioName}: горизонт {fmtMinutes(run.horizonMin)}, {run.replications} репликаций, расчёт от {fmtDateTime(run.createdAt)}
           </>
         }
-        actions={<RunPicker runs={runs} currentId={run.id} />}
+        actions={
+          <div className="flex min-w-0 max-w-full flex-1 flex-nowrap items-center gap-2 sm:flex-none">
+            <RunPicker runs={runs} currentId={run.id} />
+            <PrintButton />
+          </div>
+        }
       />
 
       <div className="kpi-strip grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
@@ -87,7 +104,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
                 <div className="mt-3 flex flex-wrap gap-2">
                   <LinkButton href={`/factory?station=${bottleneck.stationId}&run=${run.id}`}>Показать в 3D</LinkButton>
                   <LinkButton href={`/process?station=${bottleneck.stationId}&run=${run.id}`}>На мнемосхеме</LinkButton>
-                  <LinkButton href="/scenarios" variant="ghost">Проверить сценарий</LinkButton>
+                  <LinkButton href="#advisor" variant="ghost">Что даст +1 ресурс?</LinkButton>
                 </div>
               </div>
             </section>
@@ -100,6 +117,10 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           <Panel title="Участки производства" subtitle="Средние по репликациям. Выберите строку, чтобы открыть метрики участка.">
             <StationTable stations={stations} />
           </Panel>
+
+          <ResourceAdvisor runId={run.id} canCreate={canCreate} />
+
+          <CapacityCurvePanel runId={run.id} />
 
       </div>
 

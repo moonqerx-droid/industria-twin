@@ -9,6 +9,8 @@ import { FactoryCameraController } from "./FactoryCameraController";
 import { FactoryLogistics } from "./FactoryLogistics";
 import { FactoryEnvironment } from "./FactoryEnvironment";
 import { ProductionItems } from "./ProductionItems";
+import { ReplayFlow } from "./ReplayFlow";
+import type { ReplayDto } from "@/server/services/simulationService";
 import { SceneResourcesProvider } from "./resources";
 import { CAMERA_PRESETS } from "./sceneContract";
 import { SceneQualityController } from "./SceneQualityController";
@@ -28,7 +30,16 @@ function FactoryLayout({ stations }: { stations: StationSceneData[] }) {
 }
 
 /** Корневой компонент 3D-сцены. Загружается лениво (next/dynamic, ssr: false). */
-export default function FactoryCanvas({ stations, onError }: { stations: StationSceneData[]; onError?: () => void }) {
+export default function FactoryCanvas({
+  stations,
+  onError,
+  replay = null,
+}: {
+  stations: StationSceneData[];
+  onError?: () => void;
+  /** Журнал событий для анимации движения изделий (только в режиме воспроизведения). */
+  replay?: Pick<ReplayDto, "events" | "eventTypes" | "stationIds"> | null;
+}) {
   const overview = CAMERA_PRESETS["cam-overview"]!;
   return (
     <Canvas
@@ -71,6 +82,7 @@ export default function FactoryCanvas({ stations, onError }: { stations: Station
         <ConveyorSystem />
         <FactoryLogistics />
         <FactoryLayout stations={stations} />
+        {replay && <ReplayFlow replay={replay} />}
       </SceneResourcesProvider>
       <FactoryCameraController />
     </Canvas>

@@ -59,6 +59,7 @@ export async function seedDatabase(db: PrismaClient, opts: { runSimulations: (sc
   await db.resource.deleteMany();
   await db.station.deleteMany();
   await db.factory.deleteMany();
+  await db.auditLog.deleteMany();
   await db.session.deleteMany();
   await db.user.deleteMany();
   await db.role.deleteMany();
@@ -183,6 +184,8 @@ export async function seedDatabase(db: PrismaClient, opts: { runSimulations: (sc
               capacity: sp.capacity,
               hourlyCostRub: sp.hourlyCostRub,
               consumablesPerOperationRub: sp.consumablesPerOperationRub,
+              mtbfMin: sp.failure?.mtbfMin ?? null,
+              mttrMin: sp.failure?.mttrMin ?? null,
               ...distributionToColumns(sp.processTime),
             };
           }),

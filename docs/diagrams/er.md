@@ -4,6 +4,7 @@
 erDiagram
   Role ||--o{ User : "roleId"
   User ||--o{ Session : "userId"
+  User |o--o{ AuditLog : "userId (SetNull)"
   User |o--o{ Scenario : "createdById"
   User |o--o{ SimulationRun : "createdById"
   Factory ||--o{ ProductionProcess : "factoryId"
@@ -49,6 +50,16 @@ erDiagram
     string id PK
     string userId FK
     datetime expiresAt
+  }
+  AuditLog {
+    string id PK
+    datetime at
+    string userId FK "null после удаления пользователя"
+    string userLogin "псевдоним или «удалённый пользователь»"
+    string action
+    string entityType
+    string entityId
+    string details
   }
   Factory {
     string id PK
@@ -115,6 +126,8 @@ erDiagram
     float timeSd
     float hourlyCostRub
     float consumablesPerOperationRub
+    float mtbfMin "null — без отказов"
+    float mttrMin
   }
   SimulationRun {
     string id PK

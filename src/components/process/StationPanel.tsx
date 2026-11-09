@@ -49,7 +49,7 @@ export function StationPanel({
         )}
       </p>
       <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3">
-        {KEY_STATION_METRICS.map((key) => {
+        {[...KEY_STATION_METRICS, ...((st.metrics.failures?.mean ?? 0) > 0 ? (["availability", "failures"] as const) : [])].map((key) => {
           const def = STATION_METRICS[key];
           const s = st.metrics[key];
           return (
