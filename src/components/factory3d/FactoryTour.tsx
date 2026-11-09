@@ -109,7 +109,7 @@ export function FactoryTour({
 
   const [tourId, setTourId] = useState<string | null>(initialTourId);
   const tour = tours.find((t) => t.id === tourId) ?? tours[0];
-  const stops = tour?.stops ?? [];
+  const stops = useMemo(() => tour?.stops ?? [], [tour]);
   const stop = stops[stopIndex];
   const stopPoi = stop ? pois.find((p) => p.id === stop.poiId) : undefined;
 

@@ -78,6 +78,9 @@
 | FR-48 Управление пользователями | `userService`, `/api/admin/users`, `/api/admin/users/[id]`, `UserAdmin` | Авто: `api.test.ts` «администратор создаёт пользователя…», «блокировка и смена пароля отзывают сессии», «не может заблокировать… себя»; e2e «администратор создаёт пользователя…» |
 | FR-49 Журнал аудита | `AuditLog` (миграция `audit_log`), `auditService`, `/api/admin/audit`, `AuditLogPanel` | Авто: `api.test.ts` «журнал аудита фиксирует действия…» |
 | FR-50 Обезличивание при удалении | `userService.deleteUser` | Авто: `api.test.ts` «удаление пользователя обезличивает…» |
+| FR-51 Период разгона | `engine.ts`, миграция `20261110090000_warmup`, `ScenarioStudio` | Авто: `warmup.test.ts` (нулевой разгон не меняет результат, баланс изделий, рост загрузки и НЗП, постоянные расходы, валидация) |
+| FR-52 Смена своего пароля | `api/auth/password/route.ts`, `/account` | Авто: `api.test.ts` «пользователь меняет свой пароль…», «подбор текущего пароля… ограничен»; e2e «страница учётной записи…» |
+| FR-53 Защита редиректа, CSV, ресурсов | `safeRedirect.ts`, `neutralizeFormula`, `assertAffordable`, `loginAccountLimiter` | Авто: `security.test.ts`; `api.test.ts` «параллельный перебор…», «X-Forwarded-For…», «неуспешный вход с несуществующим логином…», «советник отклоняет… (422)» |
 | FR-42 Экспорт и печать | `CompareView` (`exportCsv`), `PrintButton`, `globals.css @media print` | Авто: e2e (скачивание CSV); Ручн.: предпросмотр печати |
 
 ## E. Инварианты симулятора (раздел 15 задания)

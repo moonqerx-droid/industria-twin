@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { safeNextPath } from "@/lib/safeRedirect";
 import { getCurrentUser } from "@/server/auth/session";
 import { LoginForm } from "./LoginForm";
 
@@ -46,7 +47,7 @@ function FlowSchematic() {
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
   const user = await getCurrentUser();
   const { next } = await searchParams;
-  const safeNext = next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+  const safeNext = safeNextPath(next);
   if (user) redirect(safeNext);
   return (
     <main className="grid min-h-dvh lg:grid-cols-[1.15fr_1fr]">

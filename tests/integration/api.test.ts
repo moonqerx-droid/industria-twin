@@ -19,9 +19,10 @@ import * as stationMetricsRoute from "@/app/api/stations/[id]/metrics/route";
 import * as usersRoute from "@/app/api/admin/users/route";
 import * as userRoute from "@/app/api/admin/users/[id]/route";
 import * as auditRoute from "@/app/api/admin/audit/route";
+import * as passwordRoute from "@/app/api/auth/password/route";
 import { BASELINE_PARAMETERS, STATION_IDS } from "@/domain/model/demoData";
 import { demoAccounts } from "@/server/services/seedService";
-import { adviceLimiter, loginLimiter, simulationLimiter } from "@/server/rateLimit";
+import { adviceLimiter, loginAccountLimiter, loginLimiter, passwordChangeLimiter, simulationLimiter } from "@/server/rateLimit";
 
 const BASE = "http://localhost:3000";
 const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
@@ -54,6 +55,7 @@ let admin = "";
 
 beforeAll(async () => {
   loginLimiter.reset();
+  loginAccountLimiter.reset();
   simulationLimiter.reset();
   engineer = await login("engineer");
   viewer = await login("viewer");
@@ -98,6 +100,32 @@ describe("Аутентификация", () => {
     }
     expect(last).toBe(429);
     loginLimiter.reset();
+  });
+
+  it("параллельный перебор не обходит лимит (попытка регистрируется до проверки пароля)", async () => {
+    loginLimiter.reset();
+    loginAccountLimiter.reset();
+    const statuses = await Promise.all(
+      Array.from({ length: 20 }, () => loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: "viewer", password: "guess" } })).then((r) => r.status)),
+    );
+    expect(statuses.filter((x) => x === 401).length).toBeLessThanOrEqual(10);
+    expect(statuses.filter((x) => x === 429).length).toBeGreaterThanOrEqual(10);
+    loginLimiter.reset();
+    loginAccountLimiter.reset();
+  });
+
+  it("заголовок X-Forwarded-For без TRUST_PROXY не даёт обойти лимит сменой адреса", async () => {
+    loginLimiter.reset();
+    loginAccountLimiter.reset();
+    let last = 0;
+    for (let i = 0; i < 12; i += 1) {
+      const req = request("/api/auth/login", { method: "POST", body: { login: "viewer", password: "guess" } });
+      req.headers.set("x-forwarded-for", `10.0.0.${i}`);
+      last = (await loginRoute.POST(req)).status;
+    }
+    expect(last).toBe(429);
+    loginLimiter.reset();
+    loginAccountLimiter.reset();
   });
 
   it("успешные входы не расходуют лимит, успешный вход сбрасывает счётчик неудач", async () => {
@@ -411,6 +439,27 @@ describe("Управление пользователями и журнал ау
     expect((await userRoute.DELETE(request(`/api/admin/users/${id}`, { method: "DELETE", cookie: admin }), ctx(id))).status).toBe(409);
   });
 
+  it("неуспешный вход с несуществующим логином не сохраняет введённый текст", async () => {
+    loginLimiter.reset();
+    await loginAs("Secret#Typed2026", "x");
+    const all = await (await auditRoute.GET(request("/api/admin/audit?action=login.failure", { cookie: admin }))).json();
+    expect(JSON.stringify(all)).not.toContain("Secret#Typed2026");
+    expect(all.entries[0].userLogin).toBe("неизвестный логин");
+    loginLimiter.reset();
+  });
+
+  it("советник отклоняет чрезмерно тяжёлый для анализа сценарий (422)", async () => {
+    adviceLimiter.reset();
+    const heavy = { ...BASELINE_PARAMETERS, horizonMin: 10_080, releaseWindowMin: 10_080, arrivalRatePerHour: 60, replications: 5 };
+    const created = await (await scenariosRoute.POST(request("/api/scenarios", { method: "POST", cookie: engineer, body: { name: "Тяжёлый", parameters: heavy } }))).json();
+    const id = created.scenario.id as string;
+    const run = await (await runRoute.POST(request(`/api/scenarios/${id}/run`, { method: "POST", cookie: engineer }), ctx(id))).json();
+    const res = await adviceRoute.GET(request(`/api/runs/${run.run.id}/advice`, { cookie: engineer }), ctx(run.run.id));
+    expect(res.status).toBe(422);
+    expect((await res.json()).error.code).toBe("ANALYSIS_TOO_HEAVY");
+    await scenarioRoute.DELETE(request(`/api/scenarios/${id}`, { method: "DELETE", cookie: engineer }), ctx(id));
+  });
+
   it("журнал аудита фиксирует действия и доступен только администратору", async () => {
     expect((await auditRoute.GET(request("/api/admin/audit", { cookie: viewer }))).status).toBe(403);
     const all = await (await auditRoute.GET(request("/api/admin/audit?limit=500", { cookie: admin }))).json();
@@ -421,6 +470,38 @@ describe("Управление пользователями и журнал ау
     expect(runs.entries.every((e: { action: string }) => e.action.startsWith("simulation"))).toBe(true);
   });
 
+  it("пользователь меняет свой пароль: нужен текущий, другие сессии отзываются, текущая сохраняется", async () => {
+    loginLimiter.reset();
+    passwordChangeLimiter.reset();
+    const pw = "Another#Pass2027";
+    const c1 = (await loginAs("tester.one", pw)).headers.get("set-cookie")!.split(";")[0]!;
+    const c2 = (await loginAs("tester.one", pw)).headers.get("set-cookie")!.split(";")[0]!;
+    const wrong = await passwordRoute.POST(request("/api/auth/password", { method: "POST", cookie: c1, body: { currentPassword: "nope", newPassword: "Fresh#Pass2028" } }));
+    expect(wrong.status).toBe(400);
+    const weak = await passwordRoute.POST(request("/api/auth/password", { method: "POST", cookie: c1, body: { currentPassword: pw, newPassword: "short" } }));
+    expect(weak.status).toBe(400);
+    const ok = await passwordRoute.POST(request("/api/auth/password", { method: "POST", cookie: c1, body: { currentPassword: pw, newPassword: "Fresh#Pass2028" } }));
+    expect(ok.status).toBe(200);
+    expect((await ok.json()).revokedSessions).toBeGreaterThanOrEqual(1);
+    expect((await meRoute.GET(request("/api/auth/me", { cookie: c1 }))).status).toBe(200);
+    expect((await meRoute.GET(request("/api/auth/me", { cookie: c2 }))).status).toBe(401);
+    expect((await loginAs("tester.one", "Fresh#Pass2028")).status).toBe(200);
+    expect((await passwordRoute.POST(request("/api/auth/password", { method: "POST", body: { currentPassword: "x", newPassword: "Fresh#Pass2029" } }))).status).toBe(401);
+    loginLimiter.reset();
+  });
+
+  it("подбор текущего пароля через смену пароля ограничен", async () => {
+    passwordChangeLimiter.reset();
+    const c = (await loginAs("tester.one", "Fresh#Pass2028")).headers.get("set-cookie")!.split(";")[0]!;
+    let last = 0;
+    for (let i = 0; i < 6; i += 1) {
+      last = (await passwordRoute.POST(request("/api/auth/password", { method: "POST", cookie: c, body: { currentPassword: `guess${i}`, newPassword: "Fresh#Pass2030" } }))).status;
+    }
+    expect(last).toBe(429);
+    passwordChangeLimiter.reset();
+    loginLimiter.reset();
+  });
+
   it("удаление пользователя обезличивает его записи аудита", async () => {
     const res = await userRoute.DELETE(request(`/api/admin/users/${newId}`, { method: "DELETE", cookie: admin }), ctx(newId));
     expect(res.status).toBe(200);
@@ -428,7 +509,7 @@ describe("Управление пользователями и журнал ау
     const text = JSON.stringify(all.entries.filter((e: { action: string }) => e.action !== "login.failure"));
     expect(text).not.toContain("tester.one");
     expect(text).toContain("удалённый пользователь");
-    expect((await loginAs("tester.one", "Another#Pass2027")).status).toBe(401);
+    expect((await loginAs("tester.one", "Fresh#Pass2028")).status).toBe(401);
     loginLimiter.reset();
   });
 });

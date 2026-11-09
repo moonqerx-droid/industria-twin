@@ -45,6 +45,16 @@ export const CSV_COLUMNS = [
 
 const DISTRIBUTIONS: DistributionKind[] = ["fixed", "exponential", "uniform", "triangular", "normal"];
 
+/**
+ * Защита от формул в CSV (CSV/formula injection): текстовая ячейка, начинающаяся с «=», «+», «-», «@»,
+ * табуляции или перевода строки, получает префикс-апостроф, и табличный редактор не исполнит её как формулу.
+ * Числа (в том числе отрицательные) не изменяются.
+ */
+export function neutralizeFormula(v: string): string {
+  if (/^-?\d+([.,]\d+)?$/.test(v.trim())) return v;
+  return /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
+}
+
 const fmt = (v: number | undefined | null) => (v === undefined || v === null ? "" : String(v).replace(".", ","));
 
 function distributionCells(d: DurationDistribution): Record<"min" | "mode" | "max" | "mean" | "sd", number | undefined> {
@@ -72,7 +82,7 @@ export function stationsToCsv(p: ScenarioParameters): string {
       [
         st.code,
         st.id,
-        st.name,
+        neutralizeFormula(st.name),
         sp.capacity,
         sp.processTime.kind,
         fmt(c.min),

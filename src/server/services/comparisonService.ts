@@ -95,6 +95,7 @@ export function diffParameters(a: ScenarioParameters, b: ScenarioParameters): Pa
     ["arrivalRatePerHour", "Интенсивность поступления, шт./ч", (v) => fmt(v)],
     ["horizonMin", "Горизонт, мин", (v) => fmt(v, 0)],
     ["releaseWindowMin", "Окно запуска заданий, мин", (v) => fmt(v, 0)],
+    ["warmupMin", "Период разгона (исключён из статистики), мин", (v) => fmt(v, 0)],
     ["defectProbability", "Вероятность брака (первичный контроль)", (v) => `${fmt(v * 100, 1)}%`],
     ["retestDefectProbability", "Вероятность брака (повторный контроль)", (v) => `${fmt(v * 100, 1)}%`],
     ["maxReworkCycles", "Максимум циклов доработки", (v) => fmt(v, 0)],
@@ -104,8 +105,8 @@ export function diffParameters(a: ScenarioParameters, b: ScenarioParameters): Pa
     ["seed", "Базовый seed", (v) => String(v)],
   ];
   for (const [key, label, f] of scalar) {
-    const x = a[key] as number;
-    const y = b[key] as number;
+    const x = (a[key] as number | undefined) ?? 0;
+    const y = (b[key] as number | undefined) ?? 0;
     if (x !== y) out.push({ path: key, label, before: f(x), after: f(y) });
   }
   if (a.arrivalKind !== b.arrivalKind) {

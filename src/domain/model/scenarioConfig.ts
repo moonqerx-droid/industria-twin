@@ -12,6 +12,7 @@ export function buildSimulationConfig(params: ScenarioParameters, seedOverride?:
   return {
     horizonMin: params.horizonMin,
     arrivalStopMin: Math.min(params.releaseWindowMin, params.horizonMin),
+    warmupMin: params.warmupMin ?? 0,
     arrival: { kind: params.arrivalKind, ratePerHour: params.arrivalRatePerHour },
     route: [...MAIN_ROUTE],
     stations: STATIONS.map((s) => {

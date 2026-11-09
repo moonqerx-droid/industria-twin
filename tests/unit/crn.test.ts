@@ -62,7 +62,11 @@ describe("Общие случайные числа (CRN)", () => {
     const a = outcomes(BASELINE_PARAMETERS);
     const b = outcomes(withCapacity("st-testing", 2));
     let compared = 0;
-    for (const [unit, d] of a) if (b.has(unit)) (expect(b.get(unit)).toBe(d), (compared += 1));
+    for (const [unit, d] of a) {
+      if (!b.has(unit)) continue;
+      expect(b.get(unit)).toBe(d);
+      compared += 1;
+    }
     expect(compared).toBeGreaterThan(30);
   });
 

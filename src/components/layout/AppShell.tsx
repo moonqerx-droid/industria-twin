@@ -70,7 +70,9 @@ export function AppShell({ user, children }: {
         <div className="mx-3 mb-4 flex items-center gap-3 rounded-lg border border-white/10 px-3 py-3">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#1f66c9] text-[12px] font-semibold text-white">{initials}</span>
           <span className="min-w-0 flex-1 leading-tight">
-            <span className="block truncate text-[13px] text-white">{user.displayName}</span>
+            <Link href="/account" className="block truncate text-[13px] text-white hover:underline" title="Учётная запись и смена пароля">
+              {user.displayName}
+            </Link>
             <span className="rail-muted block text-[12px]">{user.roleLabel}</span>
           </span>
           <button onClick={logout} className="rail-muted rounded-md p-1.5 hover:bg-white/10 hover:text-white" aria-label="Выйти" title="Выйти">
@@ -84,12 +86,13 @@ export function AppShell({ user, children }: {
           <div className="hidden items-center gap-2 text-[13px] text-muted lg:flex">
             <span>Цех сборки насосов</span>
             <span className="text-line-strong">/</span>
-            <span className="font-medium text-ink">{current?.label ?? "Цифровая модель"}</span>
+            <span className="font-medium text-ink">{current?.label ?? (pathname.startsWith("/account") ? "Учётная запись" : "Цифровая модель")}</span>
           </div>
           <div className="ml-auto flex items-center gap-3 text-[12px] text-muted">
             <span className="hidden items-center gap-2 rounded-full border border-line bg-raised px-3 py-1 sm:inline-flex">
               <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" />Демонстрационная среда
             </span>
+            <Link href="/account" className="underline underline-offset-4 lg:hidden">Профиль</Link>
             <button onClick={logout} className="underline underline-offset-4 lg:hidden">Выйти</button>
           </div>
         </header>

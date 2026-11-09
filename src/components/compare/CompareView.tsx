@@ -9,6 +9,7 @@ import { VERDICT_LABELS, type ChangeVerdict, type MetricComparison } from "@/dom
 import { STATUS_LABELS } from "@/domain/analysis/bottleneck";
 import { AGGREGATE_METRICS, STATION_METRICS, formatMetricValue, type AggregateMetricKey, type StationMetricKey } from "@/domain/model/metrics";
 import { CHART, SERIES_COLORS, tooltipStyle } from "@/lib/chartTheme";
+import { neutralizeFormula } from "@/domain/model/scenarioExchange";
 import { fmtDateTime, fmtSigned } from "@/lib/format";
 import type { ComparisonDto } from "@/server/services/comparisonService";
 import type { RunSummaryDto } from "@/server/services/simulationService";
@@ -102,7 +103,7 @@ function ExecutiveVerdict({ alt, baselineBottleneck }: { alt: ComparisonDto["alt
 
 /** CSV сравнения (разделитель «;», BOM — корректная кириллица в Excel). */
 function exportCsv(data: ComparisonDto) {
-  const q = (v: string) => `"${v.replace(/"/g, '""')}"`;
+  const q = (v: string) => `"${neutralizeFormula(v).replace(/"/g, '""')}"`;
   const num = (v: number | null, d: number) => (v === null || !Number.isFinite(v) ? "" : v.toFixed(d).replace(".", ","));
   const rows: string[][] = [["Сценарий", "Показатель", "Единица", "Базовый", "Альтернатива", "Разность", "ДИ 95% ±", "Метод", "Вердикт"]];
   for (const alt of data.alternatives) {

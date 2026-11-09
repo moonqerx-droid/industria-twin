@@ -167,6 +167,7 @@ export async function seedDatabase(db: PrismaClient, opts: { runSimulations: (sc
         createdById: adminId,
         horizonMin: p.horizonMin,
         releaseWindowMin: p.releaseWindowMin,
+        warmupMin: p.warmupMin ?? 0,
         arrivalKind: p.arrivalKind,
         arrivalRatePerHour: p.arrivalRatePerHour,
         defectProbability: p.defectProbability,

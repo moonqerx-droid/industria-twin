@@ -92,6 +92,7 @@ export function scenarioToParameters(s: ScenarioWithParams): ScenarioParameters 
   return {
     horizonMin: s.horizonMin,
     releaseWindowMin: s.releaseWindowMin,
+    warmupMin: s.warmupMin,
     arrivalKind: s.arrivalKind === "deterministic" ? "deterministic" : "poisson",
     arrivalRatePerHour: s.arrivalRatePerHour,
     defectProbability: s.defectProbability,
@@ -109,6 +110,7 @@ function scalarColumns(p: ScenarioParameters) {
   return {
     horizonMin: p.horizonMin,
     releaseWindowMin: p.releaseWindowMin,
+    warmupMin: p.warmupMin ?? 0,
     arrivalKind: p.arrivalKind,
     arrivalRatePerHour: p.arrivalRatePerHour,
     defectProbability: p.defectProbability,

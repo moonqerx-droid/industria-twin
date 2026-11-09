@@ -174,3 +174,14 @@ test("администратор создаёт пользователя, дей
   await page.reload();
   await expect(page.getByTestId("audit-log")).toContainText("Создание пользователя");
 });
+
+test("страница учётной записи: смена пароля проверяет текущий пароль", async ({ page }) => {
+  await login(page, "viewer", "/account");
+  await expect(page.getByRole("heading", { name: "Учётная запись" })).toBeVisible();
+  const form = page.getByRole("form", { name: "Смена пароля" });
+  await form.getByLabel("Текущий пароль").fill("wrong-password-1");
+  await form.getByLabel("Новый пароль", { exact: true }).fill("Brand#NewPass2026");
+  await form.getByLabel("Повторите новый пароль").fill("Brand#NewPass2026");
+  await form.getByRole("button", { name: "Сменить пароль" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Текущий пароль указан неверно" })).toBeVisible();
+});

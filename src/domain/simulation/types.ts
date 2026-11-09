@@ -71,6 +71,11 @@ export interface SimulationConfig {
   horizonMin: number;
   /** Момент прекращения запуска новых заданий, мин (по умолчанию = горизонт). */
   arrivalStopMin?: number;
+  /**
+   * Период разгона, мин (по умолчанию 0). Статистика собирается только на интервале [разгон, горизонт]:
+   * в момент окончания разгона счётчики и интегралы обнуляются, показатели нормируются на окно наблюдения.
+   */
+  warmupMin?: number;
   arrival: ArrivalProcess;
   /** Основной маршрут изделия: упорядоченный список stationId. */
   route: string[];
@@ -201,6 +206,8 @@ export interface SimulationResult {
   engineVersion: string;
   seed: number;
   horizonMin: number;
+  /** Период разгона, исключённый из статистики, мин. */
+  warmupMin: number;
   aggregate: AggregateResult;
   stations: StationResult[];
   units: UnitRecord[];

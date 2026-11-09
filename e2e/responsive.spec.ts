@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { login } from "./helpers";
 
-const PAGES = ["/dashboard", "/process", "/scenarios", "/compare", "/factory", "/documentation"];
+const PAGES = ["/dashboard", "/process", "/scenarios", "/compare", "/factory", "/documentation", "/account"];
 
 test("ключевые страницы без горизонтальной прокрутки страницы", async ({ page }) => {
   await login(page, "engineer");

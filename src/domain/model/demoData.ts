@@ -189,6 +189,8 @@ export interface StationParameters {
 export interface ScenarioParameters {
   horizonMin: number;
   releaseWindowMin: number;
+  /** Период разгона, исключённый из статистики, мин (по умолчанию 0 — статистика с пустой системы). */
+  warmupMin?: number;
   arrivalKind: "poisson" | "deterministic";
   arrivalRatePerHour: number;
   defectProbability: number;

@@ -55,13 +55,14 @@ export class SimulationConfigError extends Error {
 }
 
 /** Приоритеты при совпадении времени: сначала освобождаем ресурсы, затем приходы, горизонт — последним. */
-const PRIORITY = { PROCESS_FINISH: 0, REPAIR_END: 0, FAILURE: 1, ARRIVAL: 2, HORIZON_END: 9 } as const;
+const PRIORITY = { WARMUP_END: -1, PROCESS_FINISH: 0, REPAIR_END: 0, FAILURE: 1, ARRIVAL: 2, HORIZON_END: 9 } as const;
 
 type CalendarPayload =
   | { type: "ARRIVAL" }
   | { type: "PROCESS_FINISH"; stationId: string; unitId: number }
   | { type: "FAILURE"; stationId: string }
   | { type: "REPAIR_END"; stationId: string }
+  | { type: "WARMUP_END" }
   | { type: "HORIZON_END" };
 
 interface UnitState {
@@ -120,6 +121,10 @@ export function validateConfig(config: SimulationConfig): string[] {
   nonNeg("стоимость материалов", config.materialCostPerUnitRub);
   nonNeg("постоянные расходы", config.fixedCostRub);
   if (config.arrivalStopMin !== undefined) nonNeg("окончание запуска", config.arrivalStopMin);
+  if (config.warmupMin !== undefined) {
+    nonNeg("период разгона", config.warmupMin);
+    if (config.warmupMin >= config.horizonMin) issues.push("период разгона должен быть меньше горизонта");
+  }
   if (config.route.length === 0) issues.push("маршрут должен содержать хотя бы одну станцию");
 
   const ids = new Set<string>();
@@ -170,6 +175,9 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
 
   const horizon = config.horizonMin;
   const arrivalStop = Math.min(config.arrivalStopMin ?? horizon, horizon);
+  const warmup = Math.max(0, Math.min(config.warmupMin ?? 0, horizon));
+  /** Окно наблюдения: статистика собирается на [warmup, horizon]. */
+  const observed = horizon - warmup;
   const snapshotStep = config.snapshotIntervalMin ?? 10;
   const recordEvents = config.recordEvents ?? false;
   const arrivalRng: Rng = createRng(streamSeed(config.seed, STREAM.ARRIVAL));
@@ -219,6 +227,9 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
   let reworkCount = 0;
   let nextSnapshotMin = 0;
   let processed = 0;
+  /** Изделия в системе на конец разгона и поступившие после него — «запущенные» в окне наблюдения. */
+  let wipAtWarmup = 0;
+  let arrivalsObserved = 0;
 
   const log = (type: SimulationEventType, unitId: number, stationId: string | null, defect?: boolean) => {
     if (!recordEvents) return;
@@ -410,6 +421,7 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
     else scheduleNextArrival();
   }
   calendar.schedule(horizon, PRIORITY.HORIZON_END, { type: "HORIZON_END" });
+  if (warmup > 0) calendar.schedule(warmup, PRIORITY.WARMUP_END, { type: "WARMUP_END" });
   for (const s of stations.values()) scheduleNextFailure(s);
 
   for (;;) {
@@ -426,7 +438,32 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
       log("HORIZON_END", 0, null);
       break;
     }
-    if (ev.type === "FAILURE") {
+    if (ev.type === "WARMUP_END") {
+      // Конец разгона: фиксируем интегралы на момент warmup и обнуляем все накопители статистики.
+      for (const s of stations.values()) {
+        touchStation(s);
+        s.busyIntegral = 0;
+        s.queueIntegral = 0;
+        s.downIntegral = 0;
+        s.started = 0;
+        s.completed = 0;
+        s.waitSum = 0;
+        s.maxWait = 0;
+        s.consumablesCostRub = 0;
+        s.failures = 0;
+        s.peakBusy = s.busy;
+        s.maxQueue = queueLength(s);
+      }
+      touchWip();
+      wipIntegral = 0;
+      completedCount = 0;
+      scrappedCount = 0;
+      qualityChecks = 0;
+      defectsFound = 0;
+      reworkCount = 0;
+      wipAtWarmup = wip;
+      arrivalsObserved = 0;
+    } else if (ev.type === "FAILURE") {
       const s = getStation(ev.stationId);
       s.pendingFailures += 1;
       applyFailures(s);
@@ -457,6 +494,7 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
       units.set(unit.id, unit);
       touchWip();
       wip += 1;
+      arrivalsObserved += 1;
       log("ARRIVAL", unit.id, null);
       enterQueue(unit, config.route[0]!);
       scheduleNextArrival();
@@ -488,7 +526,7 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
     });
   }
 
-  const horizonHours = horizon / 60;
+  const observedHours = observed / 60;
   const stationResults: StationResult[] = [];
   let busyTotal = 0;
   let capacityTotal = 0;
@@ -499,9 +537,9 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
   let failuresTotal = 0;
   let downtimeTotal = 0;
   for (const s of stations.values()) {
-    const capMin = s.cfg.capacity * horizon;
+    const capMin = s.cfg.capacity * observed;
     const utilization = capMin > 0 ? Math.min(1, s.busyIntegral / capMin) : 0;
-    const rc = s.cfg.capacity * horizonHours * s.cfg.hourlyCostRub;
+    const rc = s.cfg.capacity * observedHours * s.cfg.hourlyCostRub;
     // Простой — время, когда исправная единица ресурса не занята (ремонт учитывается отдельно).
     const ic = (Math.max(0, capMin - s.busyIntegral - s.downIntegral) / 60) * s.cfg.hourlyCostRub;
     busyTotal += s.busyIntegral;
@@ -509,7 +547,7 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
     resourceCost += rc;
     consumablesCost += s.consumablesCostRub;
     idleCost += ic;
-    const avgQ = s.queueIntegral / horizon;
+    const avgQ = s.queueIntegral / observed;
     avgQueueTotal += avgQ;
     failuresTotal += s.failures;
     downtimeTotal += s.downIntegral;
@@ -527,7 +565,7 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
       maxWaitMin: s.maxWait,
       queueAtEnd: queueLength(s),
       inProcessAtEnd: inProcessByStation.get(s.cfg.stationId) ?? 0,
-      throughputPerHour: s.completed / horizonHours,
+      throughputPerHour: s.completed / observedHours,
       resourceCostRub: rc,
       consumablesCostRub: s.consumablesCostRub,
       idleCostRub: ic,
@@ -538,26 +576,29 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
     });
   }
 
-  const completedUnits = unitRecords.filter((u) => u.outcome === "COMPLETED");
+  // Время цикла — по изделиям, завершённым в окне наблюдения.
+  const completedUnits = unitRecords.filter((u) => u.outcome === "COMPLETED" && (u.exitMin as number) >= warmup);
   const cycleTimes = completedUnits.map((u) => (u.exitMin as number) - u.arrivalMin).sort((a, b) => a - b);
   const avg = (xs: number[]) => (xs.length === 0 ? null : xs.reduce((a, b) => a + b, 0) / xs.length);
-  const released = unitRecords.length;
+  const released = warmup > 0 ? wipAtWarmup + arrivalsObserved : unitRecords.length;
   const materialCost = released * config.materialCostPerUnitRub;
-  const totalCost = resourceCost + consumablesCost + materialCost + config.fixedCostRub;
+  // Постоянные расходы заданы за горизонт и распределяются пропорционально окну наблюдения.
+  const fixedCost = (config.fixedCostRub * observed) / horizon;
+  const totalCost = resourceCost + consumablesCost + materialCost + fixedCost;
 
   const aggregate: AggregateResult = {
     released,
     completed: completedCount,
     scrapped: scrappedCount,
     wipEnd: wip,
-    throughputPerHour: completedCount / horizonHours,
+    throughputPerHour: completedCount / observedHours,
     cycleTimeAvgMin: avg(cycleTimes),
     cycleTimeP50Min: percentile(cycleTimes, 0.5),
     cycleTimeP90Min: percentile(cycleTimes, 0.9),
     cycleTimeMaxMin: cycleTimes.length ? cycleTimes[cycleTimes.length - 1]! : null,
     waitingTimeAvgMin: avg(completedUnits.map((u) => u.waitingMin)),
     processingTimeAvgMin: avg(completedUnits.map((u) => u.processingMin)),
-    avgWip: wipIntegral / horizon,
+    avgWip: wipIntegral / observed,
     avgQueueTotal,
     utilizationAvg: capacityTotal > 0 ? Math.min(1, busyTotal / capacityTotal) : 0,
     qualityChecks,
@@ -567,7 +608,7 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
     resourceCostRub: resourceCost,
     consumablesCostRub: consumablesCost,
     materialCostRub: materialCost,
-    fixedCostRub: config.fixedCostRub,
+    fixedCostRub: fixedCost,
     totalCostRub: totalCost,
     idleCostRub: idleCost,
     costPerUnitRub: completedCount > 0 ? totalCost / completedCount : null,
@@ -579,6 +620,7 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
     engineVersion: ENGINE_VERSION,
     seed: config.seed,
     horizonMin: horizon,
+    warmupMin: warmup,
     aggregate,
     stations: stationResults,
     units: unitRecords,

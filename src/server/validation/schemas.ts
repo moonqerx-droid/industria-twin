@@ -44,6 +44,7 @@ export const scenarioParametersSchema = z
   .object({
     horizonMin: z.number().finite().min(60, "Не менее 60 мин").max(ENGINE_LIMITS.maxHorizonMin),
     releaseWindowMin: z.number().finite().min(0).max(ENGINE_LIMITS.maxHorizonMin),
+    warmupMin: z.number().finite().min(0).max(ENGINE_LIMITS.maxHorizonMin).optional(),
     arrivalKind: z.enum(["poisson", "deterministic"]),
     arrivalRatePerHour: z.number().finite().min(0).max(ENGINE_LIMITS.maxArrivalRatePerHour),
     defectProbability: z.number().finite().min(0).max(1),
@@ -56,6 +57,8 @@ export const scenarioParametersSchema = z
     stations: z.object(stationsShape).strict(),
   })
   .superRefine((p, ctx) => {
+    if ((p.warmupMin ?? 0) >= p.horizonMin)
+      ctx.addIssue({ code: "custom", path: ["warmupMin"], message: "Период разгона должен быть меньше горизонта" });
     if (p.releaseWindowMin > p.horizonMin)
       ctx.addIssue({ code: "custom", path: ["releaseWindowMin"], message: "Окно запуска не может превышать горизонт" });
     // Защита от чрезмерно тяжёлых прогонов: ожидаемое число заданий × репликации.
@@ -121,6 +124,10 @@ export const userUpdateSchema = z
     password: passwordSchema.optional(),
   })
   .refine((v) => Object.keys(v).length > 0, "Нет изменений");
+
+export const passwordChangeSchema = z
+  .object({ currentPassword: z.string().min(1, "Введите текущий пароль").max(256), newPassword: passwordSchema })
+  .refine((v) => v.currentPassword !== v.newPassword, { path: ["newPassword"], message: "Новый пароль совпадает с текущим" });
 
 export const auditQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),

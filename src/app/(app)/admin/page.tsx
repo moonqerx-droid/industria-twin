@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Panel } from "@/components/ui/Panel";
 import { ENGINE_LIMITS, ENGINE_VERSION } from "@/domain/simulation/types";
-import { fmtDateTime, fmtNumber } from "@/lib/format";
+import { fmtNumber } from "@/lib/format";
 import { PERMISSIONS, ROLE_LABELS } from "@/server/auth/permissions";
 import { getCurrentUser } from "@/server/auth/session";
 import type { RoleId } from "@/server/auth/token";

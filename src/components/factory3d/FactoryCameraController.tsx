@@ -39,7 +39,6 @@ export function FactoryCameraController() {
     } else {
       flight.current = { pos, target };
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request, presetId, camera, size.width, size.height]);
 
   useFrame((_, dt) => {

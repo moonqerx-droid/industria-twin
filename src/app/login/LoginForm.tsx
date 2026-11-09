@@ -1,5 +1,6 @@
 "use client";
 
+import { safeNextPath } from "@/lib/safeRedirect";
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 
@@ -23,7 +24,8 @@ export function LoginForm({ next }: { next: string }) {
         setError(body?.error?.message ?? "Не удалось войти");
         return;
       }
-      window.location.assign(next);
+      // Повторная проверка на клиенте: адрес возврата — только путь внутри приложения.
+      window.location.assign(safeNextPath(next));
     } catch {
       setError("Сервер недоступен. Проверьте, что приложение запущено.");
     } finally {

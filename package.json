@@ -17,8 +17,9 @@
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:e2e": "playwright test",
-    "verify": "npm run typecheck && npm run test && npm run build",
-    "report:scenarios": "tsx scripts/scenario-report.ts"
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "report:scenarios": "tsx scripts/scenario-report.ts",
+    "lint": "eslint ."
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -43,12 +44,15 @@
     "zustand": "5.0.8"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.7",
     "@playwright/test": "1.56.1",
     "@tailwindcss/postcss": "4.1.16",
     "@types/node": "22.18.0",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "@types/three": "0.180.0",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^15.5.6",
     "prisma": "6.19.3",
     "tailwindcss": "4.1.16",
     "tsx": "4.20.6",

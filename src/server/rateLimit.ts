@@ -25,15 +25,6 @@ export class SlidingWindowLimiter {
     return { allowed: true, retryAfterSec: 0 };
   }
 
-  /** Проверка без регистрации попытки (для счёта только неуспешных попыток). */
-  peek(key: string, now = Date.now()): { allowed: boolean; retryAfterSec: number } {
-    const list = (this.hits.get(key) ?? []).filter((t) => t > now - this.windowMs);
-    if (list.length >= this.limit) {
-      return { allowed: false, retryAfterSec: Math.max(1, Math.ceil((list[0]! + this.windowMs - now) / 1000)) };
-    }
-    return { allowed: true, retryAfterSec: 0 };
-  }
-
   /** Сброс счётчика ключа (например, после успешного входа). */
   clear(key: string): void {
     this.hits.delete(key);
@@ -48,9 +39,26 @@ export class SlidingWindowLimiter {
 export const simulationLimiter = new SlidingWindowLimiter(12, 60_000);
 /** Не более 10 неуспешных попыток входа за 5 минут на логин+адрес; успешный вход сбрасывает счётчик. */
 export const loginLimiter = new SlidingWindowLimiter(10, 5 * 60_000);
+/** Не более 30 неуспешных попыток за 15 минут на логин с любых адресов (защита от перебора с подменой адреса). */
+export const loginAccountLimiter = new SlidingWindowLimiter(30, 15 * 60_000);
 
-export function enforce(limiter: SlidingWindowLimiter, key: string, opts: { record?: boolean } = {}): void {
-  const r = opts.record === false ? limiter.peek(key) : limiter.check(key);
+/**
+ * Адрес клиента для ограничителя. Заголовку X-Forwarded-For доверяем только при TRUST_PROXY=1
+ * (приложение за собственным обратным прокси), и берём последний адрес — добавленный нашим прокси;
+ * иначе заголовок подделывается клиентом и не используется.
+ */
+export function clientKey(req: Request): string {
+  if (process.env.TRUST_PROXY === "1") {
+    const parts = (req.headers.get("x-forwarded-for") ?? "").split(",").map((p) => p.trim()).filter(Boolean);
+    const last = parts[parts.length - 1];
+    if (last) return last;
+    return req.headers.get("x-real-ip")?.trim() || "proxy";
+  }
+  return "direct";
+}
+
+export function enforce(limiter: SlidingWindowLimiter, key: string): void {
+  const r = limiter.check(key);
   if (!r.allowed) {
     throw new ApiError(429, "RATE_LIMITED", `Слишком много запросов. Повторите через ${r.retryAfterSec} с`, {
       retryAfterSec: r.retryAfterSec,
@@ -58,5 +66,8 @@ export function enforce(limiter: SlidingWindowLimiter, key: string, opts: { reco
   }
 }
 
-/** Не более 40 запросов советника в минуту на пользователя (результаты кэшируются, расчёт — до ~0,5 с). */
-export const adviceLimiter = new SlidingWindowLimiter(40, 60_000);
+/** Не более 5 попыток смены пароля за 15 минут на пользователя (защита от подбора текущего пароля). */
+export const passwordChangeLimiter = new SlidingWindowLimiter(5, 15 * 60_000);
+
+/** Не более 20 запросов советника и кривой мощности в минуту на пользователя (результаты кэшируются). */
+export const adviceLimiter = new SlidingWindowLimiter(20, 60_000);

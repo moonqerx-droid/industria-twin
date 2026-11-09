@@ -178,6 +178,7 @@ model Scenario {
   updatedAt               DateTime                   @updatedAt
   horizonMin              Float
   releaseWindowMin        Float
+  warmupMin               Float                      @default(0) // период разгона, исключённый из статистики
   arrivalKind             String // poisson | deterministic
   arrivalRatePerHour      Float
   defectProbability       Float
