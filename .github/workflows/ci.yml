@@ -20,8 +20,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -34,11 +34,12 @@ jobs:
       - name: Модульные и интеграционные тесты
         run: npm test
       - name: Production-сборка
-        run: npm run build
+        # next/font скачивает шрифты Google Fonts при сборке; повтор защищает от сетевых сбоев.
+        run: npm run build || (sleep 15 && npm run build)
       - name: Таблица демонстрационных сценариев
         run: |
           { echo '### Демонстрационные сценарии (движок, без БД)'; echo '```'; npm run -s report:scenarios; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: next-build
           path: .next
@@ -51,14 +52,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - run: npx prisma generate
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: next-build
           path: .next
@@ -66,7 +67,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-traces
           path: test-results
