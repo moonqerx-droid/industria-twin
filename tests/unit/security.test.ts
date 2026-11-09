@@ -8,7 +8,7 @@ describe("Безопасный адрес возврата после входа
     expect(safeNextPath("/factory?station=st-assembly")).toBe("/factory?station=st-assembly");
     expect(safeNextPath("/compare#x")).toBe("/compare#x");
   });
-  it.each(["//evil.com", "/\\evil.com", "/\\/evil.com", "https://evil.com", "javascript:alert(1)", "/\u0000x", "", null, undefined, "dashboard"])(
+  it.each(["/.//evil.com", "/./\\evil.com", "/a/..//evil.com", "//evil.com", "/\\evil.com", "/\\/evil.com", "https://evil.com", "javascript:alert(1)", "/\u0000x", "", null, undefined, "dashboard"])(
     "отклоняет %j",
     (v) => expect(safeNextPath(v as string | null | undefined)).toBe("/dashboard"),
   );

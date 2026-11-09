@@ -12,7 +12,10 @@ export function safeNextPath(next: string | null | undefined, fallback = "/dashb
   try {
     const url = new URL(next, BASE);
     if (url.origin !== BASE) return fallback;
-    return url.pathname + url.search + url.hash;
+    const out = url.pathname + url.search + url.hash;
+    // Проверяем и нормализованный результат: «/.//host» после разбора превращается в «//host».
+    if (!out.startsWith("/") || out.startsWith("//") || out.includes("\\")) return fallback;
+    return out;
   } catch {
     return fallback;
   }

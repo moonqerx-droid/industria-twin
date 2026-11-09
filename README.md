@@ -58,7 +58,7 @@ npm run build && npm start
 | `npm run report:scenarios` | Таблица результатов демонстрационных сценариев из движка |
 | `npm run verify` | lint + typecheck + тесты + сборка |
 
-CI (GitHub Actions, `.github/workflows/ci.yml`) на каждый push и pull request выполняет lint, typecheck, все тесты, сборку и e2e (desktop, tablet, mobile); таблица демонстрационных сценариев публикуется в сводке запуска.
+CI (GitHub Actions, `.github/workflows/ci.yml`, Ubuntu 24.04) на каждый push и pull request выполняет lint, typecheck, все тесты, сборку и e2e (desktop, tablet, mobile); таблица демонстрационных сценариев публикуется в сводке запуска.
 
 ## Разделы приложения
 

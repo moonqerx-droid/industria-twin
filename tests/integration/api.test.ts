@@ -22,7 +22,8 @@ import * as auditRoute from "@/app/api/admin/audit/route";
 import * as passwordRoute from "@/app/api/auth/password/route";
 import { BASELINE_PARAMETERS, STATION_IDS } from "@/domain/model/demoData";
 import { demoAccounts } from "@/server/services/seedService";
-import { adviceLimiter, loginAccountLimiter, loginLimiter, passwordChangeLimiter, simulationLimiter } from "@/server/rateLimit";
+import { adviceLimiter, loginLimiter, passwordChangeLimiter, simulationLimiter } from "@/server/rateLimit";
+import { resetLoginThrottle, throttleDelayMs, THROTTLE } from "@/server/auth/loginThrottle";
 
 const BASE = "http://localhost:3000";
 const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
@@ -55,7 +56,7 @@ let admin = "";
 
 beforeAll(async () => {
   loginLimiter.reset();
-  loginAccountLimiter.reset();
+  resetLoginThrottle({ baseDelayMs: 1 });
   simulationLimiter.reset();
   engineer = await login("engineer");
   viewer = await login("viewer");
@@ -91,41 +92,62 @@ describe("Аутентификация", () => {
     const res = await meRoute.GET(request("/api/auth/me", { cookie }));
     expect(res.status).toBe(401);
   });
-  it("ограничивает частоту попыток входа", async () => {
+  it("за доверенным прокси ограничивает попытки входа с одного адреса (429)", async () => {
     loginLimiter.reset();
-    let last = 0;
-    for (let i = 0; i < 11; i += 1) {
-      const res = await loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: "brute", password: "x" } }));
-      last = res.status;
+    resetLoginThrottle({ baseDelayMs: 1 });
+    process.env.TRUST_PROXY = "1";
+    try {
+      let last = 0;
+      for (let i = 0; i < 11; i += 1) {
+        const req = request("/api/auth/login", { method: "POST", body: { login: "brute", password: "x" } });
+        req.headers.set("x-forwarded-for", "203.0.113.7");
+        last = (await loginRoute.POST(req)).status;
+      }
+      expect(last).toBe(429);
+    } finally {
+      delete process.env.TRUST_PROXY;
+      loginLimiter.reset();
+      resetLoginThrottle({ baseDelayMs: 1 });
     }
-    expect(last).toBe(429);
-    loginLimiter.reset();
   });
 
-  it("параллельный перебор не обходит лимит (попытка регистрируется до проверки пароля)", async () => {
-    loginLimiter.reset();
-    loginAccountLimiter.reset();
+  it("параллельный перебор невозможен: одна попытка на логин одновременно", async () => {
+    resetLoginThrottle({ baseDelayMs: 1 });
     const statuses = await Promise.all(
       Array.from({ length: 20 }, () => loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: "viewer", password: "guess" } })).then((r) => r.status)),
     );
-    expect(statuses.filter((x) => x === 401).length).toBeLessThanOrEqual(10);
-    expect(statuses.filter((x) => x === 429).length).toBeGreaterThanOrEqual(10);
-    loginLimiter.reset();
-    loginAccountLimiter.reset();
+    expect(statuses.filter((x) => x === 401).length).toBeLessThanOrEqual(3);
+    expect(statuses.filter((x) => x === 429).length).toBeGreaterThanOrEqual(17);
+    resetLoginThrottle({ baseDelayMs: 1 });
   });
 
-  it("заголовок X-Forwarded-For без TRUST_PROXY не даёт обойти лимит сменой адреса", async () => {
-    loginLimiter.reset();
-    loginAccountLimiter.reset();
-    let last = 0;
+  it("смена X-Forwarded-For без TRUST_PROXY не обходит замедление по логину", async () => {
+    resetLoginThrottle({ baseDelayMs: 1 });
     for (let i = 0; i < 12; i += 1) {
       const req = request("/api/auth/login", { method: "POST", body: { login: "viewer", password: "guess" } });
       req.headers.set("x-forwarded-for", `10.0.0.${i}`);
-      last = (await loginRoute.POST(req)).status;
+      expect((await loginRoute.POST(req)).status).toBe(401);
     }
-    expect(last).toBe(429);
-    loginLimiter.reset();
-    loginAccountLimiter.reset();
+    expect(throttleDelayMs("viewer")).toBeGreaterThan(0);
+    resetLoginThrottle({ baseDelayMs: 1 });
+  });
+
+  it("посторонний не может заблокировать вход: после серии неудач владелец входит с верным паролем", async () => {
+    resetLoginThrottle({ baseDelayMs: 1 });
+    const acc = demoAccounts().find((a) => a.role === "viewer")!;
+    for (let i = 0; i < 12; i += 1) {
+      await loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: acc.login, password: `attack${i}` } }));
+    }
+    expect(throttleDelayMs(acc.login)).toBeGreaterThan(0);
+    const ok = await loginRoute.POST(request("/api/auth/login", { method: "POST", body: { login: acc.login, password: acc.password } }));
+    expect(ok.status).toBe(200);
+    expect(throttleDelayMs(acc.login)).toBe(0);
+  });
+
+  it("задержка растёт экспоненциально после бесплатных попыток и ограничена сверху", () => {
+    resetLoginThrottle();
+    expect(throttleDelayMs("nobody")).toBe(0);
+    expect(THROTTLE.MAX_DELAY_MS).toBeLessThanOrEqual(5_000);
   });
 
   it("успешные входы не расходуют лимит, успешный вход сбрасывает счётчик неудач", async () => {
