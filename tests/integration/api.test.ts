@@ -442,6 +442,30 @@ describe("Управление пользователями и журнал ау
     loginLimiter.reset();
   });
 
+  it("смена пароля и блокировка отзывают cookie доверенного устройства", async () => {
+    loginLimiter.reset();
+    deviceLoginLimiter.reset();
+    const res = await loginAs("tester.one", "Another#Pass2027");
+    const device = res.headers.getSetCookie().find((c) => c.startsWith("it_device="))!.split(";")[0]!;
+    const exhaust = async () => {
+      for (let i = 0; i < 10; i += 1) await loginAs("tester.one", `attack${i}`);
+    };
+    const withDevice = (password: string) =>
+      loginRoute.POST(request("/api/auth/login", { method: "POST", cookie: device, body: { login: "tester.one", password } }));
+    // Пока пароль прежний, устройство доверенное: лимит по логину его не блокирует.
+    await exhaust();
+    expect((await withDevice("Another#Pass2027")).status).toBe(200);
+    // Администратор задаёт новый пароль — старая cookie устройства больше не даёт отдельного счётчика.
+    await userRoute.PATCH(request(`/api/admin/users/${newId}`, { method: "PATCH", cookie: admin, body: { password: "Rotated#Pass2027" } }), ctx(newId));
+    loginLimiter.reset();
+    await exhaust();
+    expect((await withDevice("Rotated#Pass2027")).status).toBe(429);
+    loginLimiter.reset();
+    deviceLoginLimiter.reset();
+    // Возвращаем пароль, который ожидают следующие тесты.
+    await userRoute.PATCH(request(`/api/admin/users/${newId}`, { method: "PATCH", cookie: admin, body: { password: "Another#Pass2027" } }), ctx(newId));
+  });
+
   it("администратор не может заблокировать, понизить или удалить себя", async () => {
     const list = await (await usersRoute.GET(request("/api/admin/users", { cookie: admin }))).json();
     const id = list.users.find((u: { login: string }) => u.login === "admin").id as string;

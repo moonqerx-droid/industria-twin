@@ -47,7 +47,8 @@ export async function verifySessionToken(token: string | undefined | null): Prom
 }
 
 /**
- * Cookie доверенного устройства (OWASP «device cookies»): выдаётся после успешного входа и привязана к логину.
+ * Cookie доверенного устройства (OWASP «device cookies»): выдаётся после успешного входа и привязана к id пользователя
+ * и отпечатку текущего пароля (`pv`) — смена пароля, блокировка или удаление учётной записи отзывают все устройства.
  * Попытки входа с такой cookie учитываются отдельно по устройству, поэтому посторонний, исчерпавший лимит
  * неудачных попыток по логину, не блокирует владельцу вход с уже знакомого устройства.
  */
@@ -55,10 +56,10 @@ export const DEVICE_COOKIE = "it_device";
 export const DEVICE_TTL_SECONDS = 90 * 24 * 60 * 60;
 const DEVICE_AUDIENCE = "industria-twin/device";
 
-export async function signDeviceToken(login: string, deviceId: string): Promise<string> {
-  return new SignJWT({ typ: "device" })
+export async function signDeviceToken(userId: string, passwordVersion: string, deviceId: string): Promise<string> {
+  return new SignJWT({ typ: "device", pv: passwordVersion })
     .setProtectedHeader({ alg: "HS256" })
-    .setSubject(login)
+    .setSubject(userId)
     .setJti(deviceId)
     .setIssuedAt()
     .setExpirationTime(`${DEVICE_TTL_SECONDS}s`)
@@ -67,12 +68,14 @@ export async function signDeviceToken(login: string, deviceId: string): Promise<
     .sign(secretKey());
 }
 
-export async function verifyDeviceToken(token: string | undefined | null): Promise<{ login: string; deviceId: string } | null> {
+export async function verifyDeviceToken(
+  token: string | undefined | null,
+): Promise<{ userId: string; passwordVersion: string; deviceId: string } | null> {
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, secretKey(), { issuer: "industria-twin", audience: DEVICE_AUDIENCE, algorithms: ["HS256"] });
-    if (payload.typ !== "device" || typeof payload.sub !== "string" || typeof payload.jti !== "string") return null;
-    return { login: payload.sub, deviceId: payload.jti };
+    if (payload.typ !== "device" || typeof payload.sub !== "string" || typeof payload.jti !== "string" || typeof payload.pv !== "string") return null;
+    return { userId: payload.sub, passwordVersion: payload.pv, deviceId: payload.jti };
   } catch {
     return null;
   }
